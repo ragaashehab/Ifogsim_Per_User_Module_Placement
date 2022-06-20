@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Copy element &apos;LatencyModulePlacement.java&apos; to &apos;iFogSim-master/src/org.fog.placement&apos;&#x0D;&#x0A;- Original project: &apos;iFogSim-master&apos;&#x0D;&#x0A;- Destination element: &apos;iFogSim-master/src/org.fog.placement&apos;&#x0D;&#x0A;- Original element: &apos;org.fog.placement.LatencyModulePlacement.java&apos;" description="Copy compilation unit" destination="/src&lt;org.fog.placement" element1="/src&lt;org.fog.placement{LatencyModulePlacement.java" files="0" flags="589830" folders="0" id="org.eclipse.jdt.ui.copy" policy="org.eclipse.jdt.ui.copyResources" stamp="1564658836444" units="1" version="1.0"/>
+</session>

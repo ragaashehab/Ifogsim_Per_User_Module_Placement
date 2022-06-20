@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<qualifiedTypeNameHistroy>
+    <fullyQualifiedTypeName name="org.fog.placement.LatencyModifiedModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.placement.LatencyDifferentiatedModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.placement.LatencyModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.placement.LModulePlacementEdgewards"/>
+    <fullyQualifiedTypeName name="org.fog.entities.Tuple"/>
+    <fullyQualifiedTypeName name="org.fog.placement.LatencyModifiedModulePlacementNew"/>
+    <fullyQualifiedTypeName name="org.fog.utils.FogUtils"/>
+    <fullyQualifiedTypeName name="org.fog.placement.LModulePlacementOnlyCloud"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ModulePlacementEdgewards"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ModulePlacementOnlyCloud"/>
+    <fullyQualifiedTypeName name="org.fog.entities.FogDeviceCharacteristics"/>
+    <fullyQualifiedTypeName name="org.cloudbus.cloudsim.CloudletSchedulerSpaceShared"/>
+    <fullyQualifiedTypeName name="org.fog.scheduler.StreamOperatorSchedulerSpaceShared"/>
+    <fullyQualifiedTypeName name="org.fog.scheduler.TupleSchedulerSpaceShared"/>
+    <fullyQualifiedTypeName name="org.cloudbus.cloudsim.provisioners.PeProvisionerSimple"/>
+    <fullyQualifiedTypeName name="org.cloudbus.cloudsim.HostDynamicWorkload"/>
+    <fullyQualifiedTypeName name="java.util.ArrayList"/>
+    <fullyQualifiedTypeName name="org.cloudbus.cloudsim.VmSchedulerSpaceShared"/>
+    <fullyQualifiedTypeName name="org.cloudbus.cloudsim.sdn.example.VmSchedulerSpaceSharedEnergy"/>
+    <fullyQualifiedTypeName name="org.fog.utils.Config"/>
+    <fullyQualifiedTypeName name="javafx.util.Pair"/>
+    <fullyQualifiedTypeName name="org.fog.placement.LatencyModulePlacementNear"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ModulePlacementModified"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ModulePlacementDifferentiated"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.gui.core.AppModule"/>
+    <fullyQualifiedTypeName name="org.fog.application.AppModule"/>
+    <fullyQualifiedTypeName name="java.util.Collections"/>
+    <fullyQualifiedTypeName name="org.fog.entities.FogDevice"/>
+    <fullyQualifiedTypeName name="org.fog.scheduler.TupleScheduler"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ControllerEdgeward"/>
+    <fullyQualifiedTypeName name="org.cloudbus.cloudsim.CloudletSchedulerDynamicWorkload"/>
+    <fullyQualifiedTypeName name="java.util.Arrays"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ECGLatencyDifferentiatedModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ECGLatencyModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ECGLatencyModifiedModulePlacement"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ECGModulePlacementEdgewards"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ControllerEdgewardHeavy"/>
+    <fullyQualifiedTypeName name="org.fog.placement.ControllerHeavy"/>
+    <fullyQualifiedTypeName name="org.fog.entities.FogDeviceHeavy"/>
+    <fullyQualifiedTypeName name="java.util.Set"/>
+    <fullyQualifiedTypeName name="java.util.HashSet"/>
+    <fullyQualifiedTypeName name="java.lang.System"/>
+    <fullyQualifiedTypeName name="java.util.Map.Entry"/>
+</qualifiedTypeNameHistroy>

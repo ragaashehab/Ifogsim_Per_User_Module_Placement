@@ -1,0 +1,2105 @@
+package org.fog.entities;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.stream.Collectors;
+
+import org.apache.commons.math3.util.Pair;
+import org.cloudbus.cloudsim.Cloudlet;
+import org.cloudbus.cloudsim.Datacenter;
+import org.cloudbus.cloudsim.Host;
+import org.cloudbus.cloudsim.Log;
+import org.cloudbus.cloudsim.Pe;
+import org.cloudbus.cloudsim.Storage;
+import org.cloudbus.cloudsim.Vm;
+import org.cloudbus.cloudsim.VmAllocationPolicy;
+import org.cloudbus.cloudsim.core.CloudSim;
+import org.cloudbus.cloudsim.core.CloudSimTags;
+import org.cloudbus.cloudsim.core.SimEvent;
+import org.cloudbus.cloudsim.power.PowerDatacenter;
+import org.cloudbus.cloudsim.power.PowerHost;
+import org.cloudbus.cloudsim.power.models.PowerModel;
+import org.cloudbus.cloudsim.provisioners.RamProvisionerSimple;
+import org.cloudbus.cloudsim.sdn.overbooking.BwProvisionerOverbooking;
+import org.cloudbus.cloudsim.sdn.overbooking.PeProvisionerOverbooking;
+import org.fog.application.AppEdge;
+import org.fog.application.AppLoop;
+import org.fog.application.AppModule;
+import org.fog.application.Application;
+import org.fog.placement.LatencyModulePlacementNear;
+import org.fog.placement.ModulePlacement;
+import org.fog.policy.AppModuleAllocationPolicy;
+import org.fog.scheduler.StreamOperatorScheduler;
+import org.fog.utils.Config;
+import org.fog.utils.FogEvents;
+import org.fog.utils.FogUtils;
+import org.fog.utils.Logger;
+import org.fog.utils.ModuleLaunchConfig;
+import org.fog.utils.NetworkUsageMonitor;
+import org.fog.utils.TimeKeeper;
+
+public class FogDevice extends PowerDatacenter {
+	protected Queue<Tuple> northTupleQueue;
+	protected Queue<Pair<Tuple, Integer>> southTupleQueue;
+	
+	protected List<String> activeApplications;
+	
+	protected Map<String, Application> applicationMap;	
+	protected Map<Integer, Double> childToLatencyMap;
+ 
+	
+	protected Map<Integer, Integer> cloudTrafficMap;
+	
+	protected double lockTime;
+	
+	/**	
+	 * ID of the parent Fog Device
+	 */
+	protected int parentId;
+	
+	/**
+	 * ID of the Controller
+	 */
+	protected int controllerId;
+	/**
+	 * IDs of the children Fog devices
+	 */
+	protected List<Integer> childrenIds;
+
+	protected Map<Integer, List<String>> childToOperatorsMap;
+	
+	/**
+	 * Flag denoting whether the link southwards from this FogDevice is busy
+	 */
+	protected boolean isSouthLinkBusy;
+	
+	/**
+	 * Flag denoting whether the link northwards from this FogDevice is busy
+	 */
+	protected boolean isNorthLinkBusy;
+	
+	protected double uplinkBandwidth;
+	protected double downlinkBandwidth;
+	protected double uplinkLatency;
+	protected List<Pair<Integer, Double>> associatedActuatorIds;
+	
+	protected double energyConsumption;
+	protected double lastUtilizationUpdateTime;
+	protected double lastUtilization;
+	private int level;
+	
+	protected double ratePerMips;
+	
+	protected double totalCost;
+	
+	protected Map<String, Map<String, Integer>> moduleInstanceCount; //<"appid", <"modulename", count>>
+	
+////////////////////////////////////////ragaa 
+	public Map<String, List<String>> appToModulesMap;  //changed ragaa
+	// my var
+	protected List<Integer> idOfEndDevices;	
+	protected Map<Integer,FogDevice> deviceById;
+	
+	protected Map<Integer, Double> deadlineInfo;// = new HashMap<Integer, Double>();  // mobile id need deadline double
+	protected Map<Integer, Map<String, Double>> deadlineInfomodule;// = new HashMap<Integer, Map<String,Double>>();  // mobile id need deadline double
+	public Map<String, List<Pair<Integer,String>>> appToModulesMapUsers; //at me <appname ,list <idofenddevice, modulename>> users exist on my device 		
+	//protected Map<Integer, List<Pair<Integer,String>>> currentModuleMapuser; //ragaa deviceid, list<pair<userid,modulename>>
+	
+	protected Map <String,Double> moduledeadline; // = new HashMap<String,Double>(); //for specific device
+	protected Map<AppModule, Double> Appmoduledeadline; //= new HashMap<AppModule,Double>()
+	protected String placement;
+	protected Map<Integer, Double> additionalMipsInfo; // mobile id need additional mips int	 
+	//protected Map<String,  List<Pair<Integer,String>>> appToModulesMapUsersDept; // <appname ,<idofenddevice, modulename>>
+	protected int finst =0;  // filtering instances
+	protected int minst =0; //monitoring
+	protected int cinst=0; //caregiver instances
+	/////////////////////////////////////////////////
+	
+	public FogDevice(
+			String name, 
+			FogDeviceCharacteristics characteristics,
+			VmAllocationPolicy vmAllocationPolicy,
+			List<Storage> storageList,
+			double schedulingInterval,
+			double uplinkBandwidth, double downlinkBandwidth, double uplinkLatency, double ratePerMips) throws Exception {
+		super(name, characteristics, vmAllocationPolicy, storageList, schedulingInterval);
+		setCharacteristics(characteristics);
+		setVmAllocationPolicy(vmAllocationPolicy);
+		setLastProcessTime(0.0);
+		setStorageList(storageList);
+		setVmList(new ArrayList<Vm>());
+		setSchedulingInterval(schedulingInterval);
+		setUplinkBandwidth(uplinkBandwidth);
+		setDownlinkBandwidth(downlinkBandwidth);
+		setUplinkLatency(uplinkLatency);
+		setRatePerMips(ratePerMips);
+		setAssociatedActuatorIds(new ArrayList<Pair<Integer, Double>>());
+		for (Host host : getCharacteristics().getHostList()) {
+			host.setDatacenter(this);
+		}
+		setActiveApplications(new ArrayList<String>());
+		// If this resource doesn't have any PEs then no useful at all
+		if (getCharacteristics().getNumberOfPes() == 0) {
+			throw new Exception(super.getName()
+					+ " : Error - this entity has no PEs. Therefore, can't process any Cloudlets.");
+		}
+		// stores id of this class
+		getCharacteristics().setId(super.getId());
+		
+		applicationMap = new HashMap<String, Application>();
+		appToModulesMap = new HashMap<String, List<String>>();
+		
+		appToModulesMapUsers= new HashMap<String, List<Pair<Integer,String>>>(); //ragaa appname, mobid,modulename
+		//currentModuleMapuser= new HashMap<Integer, List<Pair<Integer,String>>>(); //ragaa deviceid, list<pair<userid,modulename>>
+		deadlineInfo = new HashMap<Integer, Double>();  // mobile id need deadline double
+		deadlineInfomodule = new HashMap<Integer, Map<String,Double>>();  // mobile id need deadline double
+		moduledeadline = new HashMap<String,Double>(); //deadlineInfomodule for specific device
+		Appmoduledeadline = new HashMap<AppModule,Double>();
+		additionalMipsInfo = new HashMap<Integer, Double>(); // mobile id need additional mips int	 
+
+		
+		northTupleQueue = new LinkedList<Tuple>();
+		southTupleQueue = new LinkedList<Pair<Tuple, Integer>>();
+		setNorthLinkBusy(false);
+		setSouthLinkBusy(false);
+		
+		
+		setChildrenIds(new ArrayList<Integer>());
+		setChildToOperatorsMap(new HashMap<Integer, List<String>>());
+		
+		this.cloudTrafficMap = new HashMap<Integer, Integer>();
+		
+		this.lockTime = 0;
+		
+		this.energyConsumption = 0;
+		this.lastUtilization = 0;
+		setTotalCost(0);
+		setModuleInstanceCount(new HashMap<String, Map<String, Integer>>());
+		setChildToLatencyMap(new HashMap<Integer, Double>());	
+
+	}
+
+	public FogDevice(
+			String name, long mips, int ram, 
+			double uplinkBandwidth, double downlinkBandwidth, double ratePerMips, PowerModel powerModel) throws Exception {
+		super(name, null, null, new LinkedList<Storage>(), 0);
+		
+		List<Pe> peList = new ArrayList<Pe>();
+
+		// 3. Create PEs and add these into a list.
+		peList.add(new Pe(0, new PeProvisionerOverbooking(mips))); // need to store Pe id and MIPS Rating
+
+		int hostId = FogUtils.generateEntityId();
+		long storage = 1000000; // host storage
+		int bw = 10000;
+
+		PowerHost host = new PowerHost(
+				hostId,
+				new RamProvisionerSimple(ram),
+				new BwProvisionerOverbooking(bw),
+				storage,
+				peList,
+				new StreamOperatorScheduler(peList),
+				powerModel
+			);
+
+		List<Host> hostList = new ArrayList<Host>();
+		hostList.add(host);
+
+		setVmAllocationPolicy(new AppModuleAllocationPolicy(hostList));
+		
+		String arch = Config.FOG_DEVICE_ARCH; 
+		String os = Config.FOG_DEVICE_OS; 
+		String vmm = Config.FOG_DEVICE_VMM;
+		double time_zone = Config.FOG_DEVICE_TIMEZONE;
+		double cost = Config.FOG_DEVICE_COST; 
+		double costPerMem = Config.FOG_DEVICE_COST_PER_MEMORY;
+		double costPerStorage = Config.FOG_DEVICE_COST_PER_STORAGE;
+		double costPerBw = Config.FOG_DEVICE_COST_PER_BW;
+
+		FogDeviceCharacteristics characteristics = new FogDeviceCharacteristics(
+				arch, os, vmm, host, time_zone, cost, costPerMem,
+				costPerStorage, costPerBw);
+
+		setCharacteristics(characteristics);
+		
+		setLastProcessTime(0.0);
+		setVmList(new ArrayList<Vm>());
+		setUplinkBandwidth(uplinkBandwidth);
+		setDownlinkBandwidth(downlinkBandwidth);
+		setUplinkLatency(uplinkLatency);
+		setAssociatedActuatorIds(new ArrayList<Pair<Integer, Double>>());
+		for (Host host1 : getCharacteristics().getHostList()) {
+			host1.setDatacenter(this);
+		}
+		setActiveApplications(new ArrayList<String>());
+		if (getCharacteristics().getNumberOfPes() == 0) {
+			throw new Exception(super.getName()
+					+ " : Error - this entity has no PEs. Therefore, can't process any Cloudlets.");
+		}
+		
+		
+		getCharacteristics().setId(super.getId());
+		
+		applicationMap = new HashMap<String, Application>();
+		appToModulesMap = new HashMap<String, List<String>>();
+		
+		appToModulesMapUsers=  new HashMap<String, List<Pair<Integer,String>>>(); //ragaa appname, mobid,modulename
+		//currentModuleMapuser= new HashMap<Integer, List<Pair<Integer,String>>>(); //ragaa deviceid, list<pair<userid,modulename>>
+		deadlineInfo = new HashMap<Integer, Double>();  // mobile id need deadline double
+		deadlineInfomodule = new HashMap<Integer, Map<String,Double>>();  // mobile id need deadline double
+		moduledeadline = new HashMap<String,Double>(); //deadlineInfomodule for specific device
+		Appmoduledeadline = new HashMap<AppModule,Double>();
+		additionalMipsInfo = new HashMap<Integer, Double>(); // mobile id need additional mips int
+		
+		northTupleQueue = new LinkedList<Tuple>();
+		southTupleQueue = new LinkedList<Pair<Tuple, Integer>>();
+		setNorthLinkBusy(false);
+		setSouthLinkBusy(false);
+		
+		
+		setChildrenIds(new ArrayList<Integer>());
+		setChildToOperatorsMap(new HashMap<Integer, List<String>>());
+		
+		this.cloudTrafficMap = new HashMap<Integer, Integer>();
+		
+		this.lockTime = 0;
+		
+		this.energyConsumption = 0;
+		this.lastUtilization = 0;
+		setTotalCost(0);
+		setChildToLatencyMap(new HashMap<Integer, Double>());
+		setModuleInstanceCount(new HashMap<String, Map<String, Integer>>());
+	}
+	
+	/**
+	 * Overrides this method when making a new and different type of resource. <br>
+	 * <b>NOTE:</b> You do not need to override {@link #body()} method, if you use this method.
+	 * 
+	 * @pre $none
+	 * @post $none
+	 */
+	protected void registerOtherEntity() {
+		
+	}
+	
+	@Override
+	protected void processOtherEvent(SimEvent ev) {
+		switch(ev.getTag()){
+		case FogEvents.TUPLE_ARRIVAL:
+			processTupleArrival(ev);
+			break;
+		case FogEvents.LAUNCH_MODULE:
+			processModuleArrival(ev);
+			break;
+		case FogEvents.RELEASE_OPERATOR:
+			processOperatorRelease(ev);
+			break;
+		case FogEvents.SENSOR_JOINED:
+			processSensorJoining(ev);
+			break;
+		case FogEvents.SEND_PERIODIC_TUPLE:
+			sendPeriodicTuple(ev);
+			break;
+		case FogEvents.APP_SUBMIT:
+			processAppSubmit(ev);
+			break;
+		case FogEvents.UPDATE_NORTH_TUPLE_QUEUE:
+			updateNorthTupleQueue();
+			break;
+		case FogEvents.UPDATE_SOUTH_TUPLE_QUEUE:
+			updateSouthTupleQueue();
+			break;
+		case FogEvents.ACTIVE_APP_UPDATE:
+			updateActiveApplications(ev);
+			break;
+		case FogEvents.ACTUATOR_JOINED:
+			processActuatorJoined(ev);
+			break;
+		case FogEvents.LAUNCH_MODULE_INSTANCE:
+			updateModuleInstanceCount(ev);
+			break;
+		case FogEvents.RESOURCE_MGMT:
+			manageResources(ev);
+		default:
+			break;
+		}
+	}
+	
+	/**
+	 * Perform miscellaneous resource management tasks
+	 * @param ev
+	 */
+	private void manageResources(SimEvent ev) {
+		updateEnergyConsumption();
+		send(getId(), Config.RESOURCE_MGMT_INTERVAL, FogEvents.RESOURCE_MGMT);
+	}
+
+	/**
+	 * Updating the number of modules of an application module on this device
+	 * @param ev instance of SimEvent containing the module and no of instances 
+	 */
+	private void updateModuleInstanceCount(SimEvent ev) {		
+		//System.out.println(getName()+ " Creating instances of module "+ ev.getData());
+		Object[] data = (Object[]) ev.getData();
+		AppModule mod= (AppModule)data[0];
+		Integer idOfEndDevice = (int)data[1];		
+		Integer inst= (int)data[2];
+		
+		//ModuleLaunchConfig config = (ModuleLaunchConfig)ev.getData();
+		ModuleLaunchConfig config = new ModuleLaunchConfig(mod, inst);
+		String appId = config.getModule().getAppId();
+		if(!moduleInstanceCount.containsKey(appId))
+			moduleInstanceCount.put(appId, new HashMap<String, Integer>());
+		moduleInstanceCount.get(appId).put(config.getModule().getName(), config.getInstanceCount());
+		//System.out.println(getName()+ " Creating "+config.getInstanceCount()+" instances of module "+config.getModule().getName());
+		
+///////////ragaa code to increase no of inistance for each  user
+		if(!this.appToModulesMapUsers.containsKey(appId)){
+			this.appToModulesMapUsers.put(appId,  new ArrayList<Pair<Integer,String>>());
+			}
+		
+		if(this.placement.equals("Module Placement Edgeward")) {
+			//System.out.println(" updateModuleInstanceCount "+this.getName()+  mod.getName() + "inst "+ inst + "  "+idOfEndDevice);
+			for(int i=0; i<inst; i++) {
+				Pair<Integer,String> n = new Pair<Integer,String>(++idOfEndDevice,mod.getName());
+				this.appToModulesMapUsers.get("ECG").add(n);
+			}			
+		}
+		else 
+		{
+			//System.out.println("updateModuleInstanceCount " + this.getName()+ " befor appToModulesMapUsers "+ this.appToModulesMapUsers);
+			Pair<Integer,String> n = new Pair<Integer,String>(idOfEndDevice,mod.getName());
+			this.appToModulesMapUsers.get("ECG").add(n);
+			//System.out.println("updateModuleInstanceCount " + this.getName()+ " after appToModulesMapUsers "+ this.appToModulesMapUsers);	
+			List<Pair<Integer, String>> dumappToModulesMapUsers= new ArrayList<Pair<Integer, String>>();
+			Pair<Integer, String> ddumappToModulesMapUsers;
+			for(int id: this.deadlineInfo.keySet()) {			
+				for(Pair<Integer,String> p: this.appToModulesMapUsers.get("ECG")){
+					if(id==p.getKey()) {					
+						ddumappToModulesMapUsers= new Pair<Integer, String>(p.getKey(), p.getValue());
+						dumappToModulesMapUsers.add(ddumappToModulesMapUsers);				
+					}
+				}
+			}			
+			Map<String, List<Pair<Integer, String>>> ASCappToModulesMapUsers= new HashMap<String, List<Pair<Integer, String>>>();
+			ASCappToModulesMapUsers.put("ECG", dumappToModulesMapUsers);
+			this.appToModulesMapUsers= ASCappToModulesMapUsers;
+		}
+		//System.out.println(" hiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii=============================================");
+		//System.out.println("updateModuleInstanceCount " + this.getName()+ " ASC sort of  appToModulesMapUsers "+ this.appToModulesMapUsers);
+	}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	private AppModule getModuleByName(String moduleName){
+		AppModule module = null; // canceled by ragaa
+		module = applicationMap.get("ECG").getModuleByName(moduleName); //ragaa 		
+		for(Vm vm : getHost().getVmList()){
+			//System.out.println("fogdevice getModuleByName "+ this.getName()+ "  "+ ((AppModule)vm).getName()); 
+			if(((AppModule)vm).getName().equals(moduleName)){				
+				module=(AppModule)vm;
+				break;
+			}
+		}
+		return module;
+	}
+	
+	/**
+	 * Sending periodic tuple for an application edge. Note that for multiple instances of a single source module, only one tuple is sent DOWN while instanceCount number of tuples are sent UP.
+	 * @param ev SimEvent instance containing the edge to send tuple on
+	 */
+	private void sendPeriodicTuple(SimEvent ev) {
+		AppEdge edge = (AppEdge)ev.getData();
+		String srcModule = edge.getSource();
+		AppModule module = getModuleByName(srcModule);
+		
+		if(module == null)
+			return;
+		
+		int instanceCount = module.getNumInstances();
+		/*
+		 * Since tuples sent through a DOWN application edge are anyways broadcasted, only UP tuples are replicated
+		 */
+		for(int i = 0;i<((edge.getDirection()==Tuple.UP)?instanceCount:1);i++){
+			//System.out.println(CloudSim.clock()+" : Sending periodic tuple "+edge.getTupleType());
+			Tuple tuple = applicationMap.get(module.getAppId()).createTuple(edge, getId(), module.getId());
+			updateTimingsOnSending(tuple);
+			sendToSelf(tuple);			
+		}
+		send(getId(), edge.getPeriodicity(), FogEvents.SEND_PERIODIC_TUPLE, edge);
+	}
+
+	protected void processActuatorJoined(SimEvent ev) {
+		int actuatorId = ev.getSource();
+		double delay = (double)ev.getData();
+		getAssociatedActuatorIds().add(new Pair<Integer, Double>(actuatorId, delay));
+	}
+
+	
+	protected void updateActiveApplications(SimEvent ev) {
+		Application app = (Application)ev.getData();
+		getActiveApplications().add(app.getAppId());
+	}
+
+	
+	public String getOperatorName(int vmId){
+		for(Vm vm : this.getHost().getVmList()){
+			if(vm.getId() == vmId)
+				return ((AppModule)vm).getName();
+		}
+		return null;
+	}
+	
+	/**
+	 * Update cloudet processing without scheduling future events.
+	 * 
+	 * @return the double
+	 */
+	protected double updateCloudetProcessingWithoutSchedulingFutureEventsForce() {
+		double currentTime = CloudSim.clock();
+		double minTime = Double.MAX_VALUE;
+		double timeDiff = currentTime - getLastProcessTime();
+		double timeFrameDatacenterEnergy = 0.0;
+
+		for (PowerHost host : this.<PowerHost> getHostList()) {
+			Log.printLine();
+			Log.printLine("start fogdevice call updatevmprocessing host "+ host.getId());
+			double time = host.updateVmsProcessing(currentTime); // inform VMs to update processing
+			
+			if (time < minTime) {
+				minTime = time;
+			}
+			//System.out.println("ragaa======================calculate host utilization===============================");
+			//System.out.println("======================calculate energy consumption for last time=================");
+			
+			Log.formatLine(
+					"%.2f: [Host #%d] utilization is %.2f%%",
+					currentTime,
+					host.getId(),
+					host.getUtilizationOfCpu() * 100);
+		}
+
+		if (timeDiff > 0) {
+			Log.formatLine(
+					"\nEnergy consumption for the last time frame from %.2f to %.2f:",
+					getLastProcessTime(),
+					currentTime);
+
+			for (PowerHost host : this.<PowerHost> getHostList()) {
+				
+				double previousUtilizationOfCpu = host.getPreviousUtilizationOfCpu();
+				double utilizationOfCpu = host.getUtilizationOfCpu();
+				//if(this.getName()=="cloud") {					
+					//System.out.println(" error here ======="+this.getName()+ " previous "+ previousUtilizationOfCpu+ " utilization "+ utilizationOfCpu+"  time  "+timeDiff);
+					//previousUtilizationOfCpu=0.0;
+				//}
+				double timeFrameHostEnergy = host.getEnergyLinearInterpolation(
+						previousUtilizationOfCpu,
+						utilizationOfCpu,
+						timeDiff);
+				
+				timeFrameDatacenterEnergy += timeFrameHostEnergy;
+
+				Log.printLine();
+				Log.formatLine(
+						"%.2f: [Host #%d] utilization at %.2f was %.2f%%, now is %.2f%%",
+						currentTime,
+						host.getId(),
+						getLastProcessTime(),
+						previousUtilizationOfCpu * 100,
+						utilizationOfCpu * 100);
+				Log.formatLine(
+						"%.2f: [Host #%d] energy is %.2f W*sec",
+						currentTime,
+						host.getId(),
+						timeFrameHostEnergy);
+			}
+
+			Log.formatLine(
+					"\n%.2f: Data center's energy is %.2f W*sec\n",
+					currentTime,
+					timeFrameDatacenterEnergy);
+		}
+		setPower(getPower() + timeFrameDatacenterEnergy);
+		
+		checkCloudletCompletion();		
+		
+/////////////////////////////////////ragaa/////////////////////////////////
+		if(this.placement=="Module Placement Edgeward")
+			checkDevicePerformanceEdgeward();
+		else
+			checkDevicePerformance();
+//////////////////////////////////////ragaa/////////////////////////////////end		
+		/** Remove completed VMs **/		/** Change made by HARSHIT GUPTA		*/
+		/*for (PowerHost host : this.<PowerHost> getHostList()) {
+			for (Vm vm : host.getCompletedVms()) {
+				getVmAllocationPolicy().deallocateHostForVm(vm);
+				getVmList().remove(vm);
+				Log.printLine("VM #" + vm.getId() + " has been deallocated from host #" + host.getId());
+			}
+		}*/		
+		Log.printLine();
+		setLastProcessTime(currentTime);
+		return minTime;
+	}
+////////////////////////ragaa   checkDevicePerformance()///////////////////////////////
+	public void checkDevicePerformance() {	
+		//System.out.println("fogdevice=========checkDevicePerformance============="+this.getName() + "  "+ this.getId()+" utilizationofcpu "+ this.getHost().getUtilizationOfCpu());//+ " host "+  this.getHost().getId() this.getHost().getPower()+ " utilization "+ this.getHost().getUtilizationOfCpuMips()+this.getHost().getUtilizationOfCpu()+ " getEnergyConsumption()" + getEnergyConsumption());
+		FogDevice PDev= null; PowerHost PHost= null; Pair<Integer, Vm> migrated = new Pair<Integer, Vm>(null,null);
+		switch (this.getName()) { 
+			case "cloud" :{  
+				//System.out.println("cloud"+ this.getName()+ this.getHost().getUtilizationOfCpu());
+				break;
+			}
+			case "proxy-server" :{	
+				if(this.getHost().getUtilizationOfCpu()> 0.90) { //if (this.getHost().getPower()>= 100) {	//if (getEnergyConsumption()> 5000) {					
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());
+					PHost=  PDev.getHost();					
+					List<Pair<Integer, String>>pp= this.appToModulesMapUsers.get("ECG");					
+					Pair<Integer, String> miguser= pp.get(pp.size()-1);	// lowest priority user is migrated				
+					AppModule myvm = getModuleByName(miguser.getValue());////Integer id= miguser.getKey();
+					Map<String, Application> myapplicationMap= applicationMap;						
+					Application app = (Application)myapplicationMap.get("ECG");					
+					sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+					sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);					
+					Object[] data = new Object[3];
+					data[0] =(Vm)myvm;
+					data[1]= miguser.getKey(); // mobileid of the module 
+					if(myvm.getName()=="Filtering"){
+						data[2] = ++finst;			
+						sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+						}
+					if(myvm.getName()=="Monitoring"){
+						data[2] = ++minst;
+						sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+						}
+					if(myvm.getName()=="Caregiver"){
+						data[2] = ++cinst;
+						sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+						}
+					migrated = new Pair<Integer, Vm>(miguser.getKey(), (Vm)myvm);
+					System.out.println("Migrating lowest priority user "+  migrated.getKey()+" "+((AppModule)migrated.getValue()).getName()+" from device " + this.getName()+"  to device " + PDev.getName());
+					}				
+				break;
+				}
+			case "d-"+ 0 :
+			case "d-"+ 1 :
+			case "d-"+ 2 :{				
+				if(this.getHost().getUtilizationOfCpu()> 0.90) { //if (this.getHost().getPower()>= 100) {	//if (getEnergyConsumption()> 5000) {					
+					if(placement=="Latency Module Placement") {
+						PDev= (FogDevice)CloudSim.getEntity(this.getParentId());						
+						PHost=  PDev.getHost();
+						System.out.println(this.getName()+ " "+this.getHost().getUtilizationOfCpu()+ " proxy utilization "+ PHost.getUtilizationOfCpu());
+						if(PHost.getUtilizationOfCpu()>0.90) {							
+							PDev= (FogDevice)CloudSim.getEntity("cloud");
+							PHost=  PDev.getHost();
+							System.out.println(this.getName()+ " "+ placement +" Proxy-server is full, migrating modules to "+ PDev.getName());
+							}
+						}
+					if(placement=="Latency Modified Module Placement") {
+						PDev= (FogDevice)CloudSim.getEntity("cloud");
+						PHost=  PDev.getHost();
+						System.out.println("Migrating modules out of device "+this.getName()+" to "+ PDev.getName()+ "  "+placement);
+						}					
+					List<Pair<Integer, String>>pp= this.appToModulesMapUsers.get("ECG");
+					Pair<Integer, String> miguser= pp.get(pp.size()-1);	
+					AppModule myvm= getModuleByName(miguser.getValue()); //AppModule MOD = myvm;
+					Map<String, Application> myapplicationMap= applicationMap;						
+					Application app = (Application)myapplicationMap.get("ECG");
+					//System.out.println("applicationMap  " +applicationMap+ app);
+					sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+					sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);					
+					// code to update number of instances for each module at the dept  //////////////						
+					Object[] data = new Object[3];
+					data[0] =(Vm)myvm;
+					data[1]= miguser.getKey(); // mobileid of the module
+					if(myvm.getName()=="Filtering"){
+						data[2] = ++finst;
+						//System.out.println(this.getName()+incomingOperator+ data[0]+data[1]);
+						sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+						}
+					if(myvm.getName()=="Monitoring"){
+						data[2] = ++minst;
+						sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+						}				
+					migrated = new Pair<Integer, Vm>(miguser.getKey(), (Vm)myvm);
+					System.out.println("Migrating lowest priority user "+ migrated.getKey()+" "+((AppModule)migrated.getValue()).getName()+" out of device " +this.getName()+ " to device " + PDev.getName()+ "  "+placement );
+					}
+				break;
+			}
+			default:{  			//mobile id  case 6:{     getUtilizationOfCpu() > 0.6666
+				//System.out.println("mobile "+ this.getName()+this.appToModulesMap);	//System.out.println("mobile "+ this.getName()+" moduledeadline "+ this.moduledeadline+ "  deadlineInfomodule  " + this.deadlineInfomodule);
+				if(this.getHost().getUtilizationOfCpu()> 0.8000) { //if (this.getHost().getPower()>= 100) {	//if (getEnergyConsumption()> 5000) {			
+					if(this.getId()==6) { //.getName()=="m-0-0") {	//System.out.println("m-0-0 is out "+this.getId()+ this.getName());
+						break;
+					}
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());
+					PHost=  PDev.getHost();								
+					for(AppModule myvm : this.Appmoduledeadline.keySet()) {	
+						System.out.println("Migrating " +myvm.getName()+ " out of mobile "+ this.getId()+ " to "+ PDev.getName());					
+						Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")
+						migrate.put("vm", (Vm)myvm);
+						migrate.put("host",PHost);
+						migrate.put("datacenter",PHost.getDatacenter());
+						//System.out.println(this.getName()+" datacenterid " +this.getId()+" hostid "+this.getHost().getId()+ " will migrate vm "+ myvm.getId()+ MOD.getName()+ " to host "+ PHost.getId()+" datacenter "+ PHost.getDatacenter().getName() + " migrate[] = "+migrate);
+						sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);						
+						Map<String, Application> myapplicationMap= applicationMap;						
+						Application app = (Application)myapplicationMap.get("ECG");
+						sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+						sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);
+						// code to update number of instances for each module at the dept  //////////////						
+							Object[] data = new Object[3];
+							data[0] =(Vm)myvm;
+							data[1]= this.getId(); 
+							if(myvm.getName()=="Filtering"){
+								data[2] = ++finst;	//System.out.println(this.getName()+incomingOperator+ data[0]+data[1]);
+								sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+								}
+							if(myvm.getName()=="Monitoring"){
+								data[2] = ++minst;
+								sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+								}			
+							migrated = new Pair<Integer, Vm>(this.getId(), (Vm)myvm);
+							this.Appmoduledeadline.remove(myvm);
+							break;					
+						}						
+					}// end mobile device
+			}// end default 
+		}// end switch case
+		if(migrated.getKey()!= null) {			//Pair<Integer, Vm> migrated	 
+			this.appToModulesMap.get("ECG").remove(((AppModule)migrated.getValue()).getName());
+			this.getVmAllocationPolicy().deallocateHostForVm(migrated.getValue());
+			this.getVmList().remove(migrated.getValue());
+			
+			String modnam = ((AppModule)migrated.getValue()).getName();
+			Pair<Integer,String>migratednam= new Pair<Integer,String>(migrated.getKey(), modnam);
+			this.appToModulesMapUsers.get("ECG").remove(migratednam);
+			//System.out.println(this.getName()+ " migrated " + migrated +" appToModulesMap "+ this.appToModulesMap+ " appToModulesMapUsers "+this.appToModulesMapUsers);					
+			}
+	}
+//////////////////////////////////////////////////////////////////////////////////////////////
+	private void checkDevicePerformanceEdgeward() {
+		FogDevice PDev= null; PowerHost PHost= null; Pair<Integer, Vm> migrated = new Pair<Integer, Vm>(null,null);
+		switch (this.getName()) { 
+			case "cloud" :{  
+				//System.out.println("cloud"+ this.getName()+ this.getHost().getUtilizationOfCpu());
+				break;
+			}
+			case "proxy-server" :{
+				System.out.println(this.getName()+ " "+this.getHost().getUtilizationOfCpu()+" moduledeadline " + this.moduledeadline);
+				if(this.getHost().getUtilizationOfCpu()> 5.00 && (this.moduledeadline.size() > 0)) {					
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());
+					PHost=  PDev.getHost();
+					
+					Map<String, Application> myapplicationMap= applicationMap;						
+					Application app = (Application)myapplicationMap.get("ECG");					
+					sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); 					
+					
+					Map.Entry<String,Double> entry = this.moduledeadline.entrySet().iterator().next();
+					 String key = entry.getKey();
+					 Double value = entry.getValue();
+					 System.out.println(this.getName()+ " moduledeadline  key " + key +" value "+ value);
+					 
+					 List<Pair<Integer, String>>pp= this.appToModulesMapUsers.get("ECG");				 
+					 int i=0;	AppModule mymod= null; 
+					 List<Pair<Integer, String>>remusrlist= new ArrayList<Pair<Integer,String>>();
+					 List<String>remumodlist= new ArrayList<String>();
+					 List<Vm>remvmlist= new ArrayList<Vm>();  //System.out.println(" pp  " + pp);				 
+					 for(Vm myvm:  this.getHost().getVmList()) { 
+						 String nam= ((AppModule)myvm).getName();
+						 for(Pair<Integer, String> miguser: pp) {
+							 //System.out.println(" miguser " + miguser + key +" "+miguser.getValue().equals(key));
+							 if((nam.equals(key))&& (miguser.getValue().equals(key))) {
+								i=i+1;
+								//myvm= getModuleByName(miguser.getValue()); //AppModule MOD = myvm;
+								remusrlist.add(miguser);
+								remumodlist.add(miguser.getValue());
+								if(! remvmlist.contains(myvm))
+									remvmlist.add(myvm);						
+								mymod= (AppModule)myvm;
+								 sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, mymod); //calls processModuleArrival(ev);					
+								// code to update number of instances for each module at the dept  //////////////																
+								Object[] data = new Object[3];
+								data[0] =mymod;
+								data[1]= 0; // mobileid of the module
+								data[2]= i;
+								sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+								Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")
+								migrate.put("vm", mymod);
+								migrate.put("host",PHost);
+								migrate.put("datacenter",PHost.getDatacenter());
+								sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);						
+							}
+						}					 
+					 }
+					 System.out.println(i + " remusrlist "+ remusrlist + "remumodlist "+	remumodlist+"	remvmlist"+		remvmlist);												
+						
+						i=0; moduledeadline.remove(key);				
+						
+						this.appToModulesMapUsers.get("ECG").removeAll(remusrlist);				
+						this.appToModulesMap.get("ECG").removeAll(remumodlist);
+						System.out.println("VmList size befor " + this.getVmList().size()+ " "+ this.getVmList());
+						System.out.println("remvmlist " + remvmlist.size());
+						for (Vm vm:remvmlist) {
+							System.out.println(" vm  " + vm);
+							this.getVmAllocationPolicy().deallocateHostForVm(vm);
+							this.getVmList().remove(vm);
+						}
+						System.out.println("VmList size after " + this.getVmList().size()+ " "+ this.getVmList());
+						//System.out.println(" hiiiiiiii");
+						System.out.println("Migrating the whole module "+ key +" out of device " +this.getName()+ " to device " + PDev.getName()+ "  "+placement );
+						System.out.println("appToModulesMap "+ this.appToModulesMap+ " appToModulesMapUsers "+this.appToModulesMapUsers);
+		//				System.out.println(" new moduledeadline " +moduledeadline);
+						}
+				break;
+				}
+			case "d-"+ 0 :
+			case "d-"+ 1 :
+			case "d-"+ 2 :{				
+				System.out.println(this.getName()+ " "+this.getHost().getUtilizationOfCpu()+" moduledeadline " + this.moduledeadline);
+				//System.out.println("vmlist " + this.getHost().getVmList());
+				if((this.getHost().getUtilizationOfCpu()> 1.00) && (this.moduledeadline.size() > 0)) {										
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());						
+					PHost=  PDev.getHost();
+					//System.out.println(this.getName()+ " "+this.getHost().getUtilizationOfCpu()+ " proxy utilization "+ PHost.getUtilizationOfCpu());
+					double PHostUtilizationOfCpu = PHost.getUtilizationOfCpu();
+					if(PHostUtilizationOfCpu > 0.70) { //70 + this.getHost().getAllocatedMipsForVm(vm);							
+						PDev= (FogDevice)CloudSim.getEntity("cloud");
+						PHost=  PDev.getHost();
+						System.out.println(this.getName()+ " "+ placement +" Proxy-server is full, migrating the whole modules to "+ PDev.getName());
+						}
+				Map<String, Application> myapplicationMap= applicationMap;						
+				Application app = (Application)myapplicationMap.get("ECG");
+				sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();					
+				
+				 Map.Entry<String,Double> entry = this.moduledeadline.entrySet().iterator().next();
+				 String key = entry.getKey();
+				 Double value = entry.getValue();
+				 System.out.println(this.getName()+ " moduledeadline  key " + key +" value "+ value);				 
+				 
+				 List<Pair<Integer, String>>pp= this.appToModulesMapUsers.get("ECG");				 
+				 int i=0;	AppModule mymod= null; 
+				 List<Pair<Integer, String>>remusrlist= new ArrayList<Pair<Integer,String>>();
+				 List<String>remumodlist= new ArrayList<String>();
+				 List<Vm>remvmlist= new ArrayList<Vm>();  //System.out.println(" pp  " + pp);				 
+				 for(Vm myvm:  this.getHost().getVmList()) { 
+					 String nam= ((AppModule)myvm).getName();
+					 for(Pair<Integer, String> miguser: pp) {
+						 //System.out.println(" miguser " + miguser + key +" "+miguser.getValue().equals(key));
+						 if((nam.equals(key))&& (miguser.getValue().equals(key))) {
+							i=i+1;
+							//myvm= getModuleByName(miguser.getValue()); //AppModule MOD = myvm;
+							remusrlist.add(miguser);
+							remumodlist.add(miguser.getValue());
+							if(!remvmlist.contains(myvm))
+								remvmlist.add(myvm);
+							mymod= (AppModule)myvm;
+							sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, mymod); //calls processModuleArrival(ev);
+							Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")
+							migrate.put("vm", mymod);
+							migrate.put("host",PHost);
+							migrate.put("datacenter",PHost.getDatacenter());
+							sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);
+							// code to update number of instances for each module at the dept  //////////////						
+							Object[] data = new Object[3];
+							data[0] =mymod;
+							data[1]= 0; // mobileid of the module
+							data[2]= i;
+							sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();							
+						}
+					}					 
+				 }
+				 System.out.println(i + " remusrlist "+ remusrlist + "remumodlist "+	remumodlist+"	remvmlist"+	remvmlist);											
+					
+					i=0; moduledeadline.remove(key);					
+					this.appToModulesMapUsers.get("ECG").removeAll(remusrlist);				
+					this.appToModulesMap.get("ECG").removeAll(remumodlist);
+					System.out.println("VmList size befor " + this.getVmList().size());
+					System.out.println("remvmlist " + remvmlist.size());
+					for (Vm vm:remvmlist) {
+						System.out.println(" vm  " + vm);					
+						this.getVmAllocationPolicy().deallocateHostForVm(vm);
+						this.getVmList().remove(vm);
+					}
+					//System.out.println(" hiiiiiiii");
+					System.out.println("Migrating the whole module "+ key +" out of device " +this.getName()+ " to device " + PDev.getName()+ "  "+placement );
+					System.out.println("appToModulesMap "+ this.appToModulesMap+ " appToModulesMapUsers "+this.appToModulesMapUsers);
+					System.out.println("VmList size after " + this.getVmList().size()+ " "+ this.getVmList());
+	//				System.out.println(" new moduledeadline " +moduledeadline);
+					}
+					break;
+					}
+			default:{  			//mobile id  case 6:{     getUtilizationOfCpu() > 0.6666
+				//System.out.println("mobile "+ this.getName()+this.appToModulesMap);	//System.out.println("mobile "+ this.getName()+" moduledeadline "+ this.moduledeadline+ "  deadlineInfomodule  " + this.deadlineInfomodule);
+				if(this.getHost().getUtilizationOfCpu()> 0.8000) { //if (this.getHost().getPower()>= 100) {	//if (getEnergyConsumption()> 5000) {			
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());
+					PHost=  PDev.getHost();								
+					for(AppModule myvm : this.Appmoduledeadline.keySet()) {	
+						System.out.println("Migrating " +myvm.getName()+ " out of mobile "+ this.getId()+ " "+this.getName()+ " to "+ PDev.getName());					
+						Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")
+						migrate.put("vm", (Vm)myvm);
+						migrate.put("host",PHost);
+						migrate.put("datacenter",PHost.getDatacenter());
+						//System.out.println(this.getName()+" datacenterid " +this.getId()+" hostid "+this.getHost().getId()+ " will migrate vm "+ myvm.getId()+ MOD.getName()+ " to host "+ PHost.getId()+" datacenter "+ PHost.getDatacenter().getName() + " migrate[] = "+migrate);
+						sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);						
+						Map<String, Application> myapplicationMap= applicationMap;						
+						Application app = (Application)myapplicationMap.get("ECG");
+						sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+						sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);
+						// code to update number of instances for each module at the dept  //////////////						
+							Object[] data = new Object[3];
+							data[0] =(Vm)myvm;
+							data[1]= this.getId(); 
+							data[2] = 1;	//System.out.println(this.getName()+incomingOperator+ data[0]+data[1]);
+							sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();							
+							migrated = new Pair<Integer, Vm>(this.getId(), (Vm)myvm);
+							this.Appmoduledeadline.remove(myvm);
+							break;					
+						}						
+					}// end mobile device
+			}// end default 
+		}// end switch case
+		if(migrated.getKey()!= null && this.getName().startsWith("m")) {			//Pair<Integer, Vm> migrated	 
+			this.appToModulesMap.get("ECG").remove(((AppModule)migrated.getValue()).getName());
+			this.getVmAllocationPolicy().deallocateHostForVm(migrated.getValue());
+			this.getVmList().remove(migrated.getValue());
+			
+			String modnam = ((AppModule)migrated.getValue()).getName();
+			Pair<Integer,String>migratednam= new Pair<Integer,String>(migrated.getKey(), modnam);
+			this.appToModulesMapUsers.get("ECG").remove(migratednam);
+			//System.out.println(this.getName()+ " migrated " + migrated +" appToModulesMap "+ this.appToModulesMap+ " appToModulesMapUsers "+this.appToModulesMapUsers);					
+		}
+	}
+	/////////////////////////////////////////////////////////////////////////
+	private void checkDevicePerformanceEdgeward2() {
+		// TODO Auto-generated method stub
+		//System.out.println("fogdevice=========checkDevicePerformanceEdgeward============="+this.getName() + "  "+ this.getId()+" utilizationofcpu "+ this.getHost().getUtilizationOfCpu());//+ " host "+  this.getHost().getId() this.getHost().getPower()+ " utilization "+ this.getHost().getUtilizationOfCpuMips()+this.getHost().getUtilizationOfCpu()+ " getEnergyConsumption()" + getEnergyConsumption());
+		FogDevice PDev= null; PowerHost PHost= null; Pair<Integer, Vm> migrated = new Pair<Integer, Vm>(null,null);
+		switch (this.getName()) { 
+			case "cloud" :{  
+				//System.out.println("cloud"+ this.getName()+ this.getHost().getUtilizationOfCpu());
+				break;
+			}
+			case "proxy-server" :{	
+				if(this.getHost().getUtilizationOfCpu()> 0.90 && (this.moduledeadline.size()!=0)) {
+					System.out.println(this.getHost().getUtilizationOfCpu());
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());
+					PHost=  PDev.getHost();
+					
+					AppModule myvm = getModuleByName("Monitoring");
+					Map<String, Application> myapplicationMap= applicationMap;						
+					Application app = (Application)myapplicationMap.get("ECG");					
+					sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+					sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);					
+					Object[] data = new Object[3];
+					data[0] =(Vm)myvm;
+					data[1]= 0; // mobileid of the module
+					data[2] = 1;			
+					sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();					
+					
+					//migrated = new Pair<Integer, Vm>(0, myvm);
+					System.out.println("Migrating "+ myvm.getName()+" from device " + this.getName()+"  to device " + PDev.getName());
+					}				
+				break;
+				}
+			case "d-"+ 0 :
+			case "d-"+ 1 :
+			case "d-"+ 2 :{				
+				System.out.println(this.getName()+ " "+this.getHost().getUtilizationOfCpu()+" moduledeadline " + this.moduledeadline);
+				//System.out.println("vmlist " + this.getHost().getVmList());
+				if((this.getHost().getUtilizationOfCpu()> 0.90) && (this.moduledeadline.size()!=0)) {										
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());						
+					PHost=  PDev.getHost();
+					//System.out.println(this.getName()+ " "+this.getHost().getUtilizationOfCpu()+ " proxy utilization "+ PHost.getUtilizationOfCpu());
+					double PHostUtilizationOfCpu = PHost.getUtilizationOfCpu();
+					if(PHostUtilizationOfCpu > 0.70) { //70 + this.getHost().getAllocatedMipsForVm(vm);							
+						PDev= (FogDevice)CloudSim.getEntity("cloud");
+						PHost=  PDev.getHost();
+						System.out.println(this.getName()+ " "+ placement +" Proxy-server is full, migrating modules to "+ PDev.getName());
+						}
+					
+					Map<String, Application> myapplicationMap= applicationMap;						
+					Application app = (Application)myapplicationMap.get("ECG");
+					sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+					
+					Map<String, Double> dummoduledeadline= this.moduledeadline;
+					List<String> dumappToModulesMap= this.appToModulesMap.get("ECG");
+					try {
+					for(String vm : dummoduledeadline.keySet()) {	//	map< appmodulename, double deadline> moduledeadline
+						int i=0;
+						for(String mod: dumappToModulesMap) { //Map<String, List<String>> appToModulesMap;							
+							if(mod.equals(vm)) {
+								AppModule myvm= getModuleByName(mod);
+								i++;  // number of instance s																		
+								//System.out.println(i+ "Migrating " + mod + " out of "+ this.getId()+ " to "+ PDev.getName());																					
+		
+								Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")
+								migrate.put("vm", myvm);
+								migrate.put("host",PHost);
+								migrate.put("datacenter",PHost.getDatacenter());
+								//System.out.println(this.getName()+" datacenterid " +this.getId()+" hostid "+this.getHost().getId()+ " will migrate vm "+ myvm.getId()+ MOD.getName()+ " to host "+ PHost.getId()+" datacenter "+ PHost.getDatacenter().getName() + " migrate[] = "+migrate);
+								//sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);														
+								sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);																
+																							
+								// code to calculate number of instances  //////////////
+								Object[] data = new Object[3];
+								data[0] =myvm;
+								data[1]= 0; // mobileid of the module
+								data[2] = 1; // myvm.getNumInstances();
+								//System.out.println("number of instances of " +myvm+ "  "+  data[2]);
+								sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+																								
+								this.appToModulesMap.remove(mod);								
+								this.getVmAllocationPolicy().deallocateHostForVm(myvm);
+								this.getVmList().remove(myvm);
+								System.out.println("Migrating module "+ myvm.getName() +" out of device " +this.getName()+ " to device " + PDev.getName()+ "  "+placement );
+								//System.out.println("vm moduledeadline "+ vm + "mod apptomodulesmap " + mod +" "+  i);						
+							}						
+						}
+						this.moduledeadline.remove(vm);
+						break;
+						}					
+					}
+					catch (Exception e) {
+						e.printStackTrace();
+						System.out.println("Unwanted errors happen");
+					}
+					}
+			} // end dept
+			default:{  			//mobile id  case 6:{     getUtilizationOfCpu() > 0.6666
+				//System.out.println("mobile "+ this.getName()+this.appToModulesMap);	//System.out.println("mobile "+ this.getName()+" moduledeadline "+ this.moduledeadline+ "  deadlineInfomodule  " + this.deadlineInfomodule);
+				if(this.getName().startsWith("m") && this.getHost().getUtilizationOfCpu()> 0.8000) { //if (this.getHost().getPower()>= 100) {	//if (getEnergyConsumption()> 5000) {			
+					PDev= (FogDevice)CloudSim.getEntity(this.getParentId());
+					PHost=  PDev.getHost();
+					//System.out.println("tooot  "+ PDev.getName());
+					for(AppModule myvm : this.Appmoduledeadline.keySet()) {	
+						System.out.println("Migrating " +myvm.getName()+ " out of mobile "+ this.getId()+ " "+this.getName()+ " to "+ PDev.getName());					
+						Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")
+						migrate.put("vm", myvm);
+						migrate.put("host",PHost);
+						migrate.put("datacenter",PHost.getDatacenter());
+						//System.out.println(this.getName()+" datacenterid " +this.getId()+" hostid "+this.getHost().getId()+ " will migrate vm "+ myvm.getId()+ MOD.getName()+ " to host "+ PHost.getId()+" datacenter "+ PHost.getDatacenter().getName() + " migrate[] = "+migrate);
+						sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);
+						
+						Map<String, Application> myapplicationMap= applicationMap;						
+						Application app = (Application)myapplicationMap.get("ECG");
+						sendNow(PDev.getId(), FogEvents.APP_SUBMIT, app); //calls 	processAppSubmit(ev); Application app = (Application)ev.getData();
+						
+						sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);
+						
+						// code to update number of instances for each module at the dept  //////////////						
+							Object[] data = new Object[3];
+							data[0] =myvm;
+							data[1]= 0;
+							data[2] = 1;	//System.out.println(this.getName()+incomingOperator+ data[0]+data[1]);
+							sendNow(PDev.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();
+							
+							migrated = new Pair<Integer, Vm>(this.getId(), myvm);
+							this.Appmoduledeadline.remove(myvm);
+							System.out.println("tooot  5  ");		
+							
+							break;					
+						}						
+					}// end mobile device
+			}// end default 
+			if(this.getName().startsWith("m")&& migrated.getKey()!= null) {
+				String remod = ((AppModule)migrated.getValue()).getName();
+				this.appToModulesMap.get("ECG").remove(remod);
+				this.getVmAllocationPolicy().deallocateHostForVm(migrated.getValue());			
+				this.getVmList().remove(migrated.getValue());
+			}
+		}// end switch case
+	}
+	//////////////////////////////////////////////////////////////////////////////////////////////////
+		/*if(migrated.getKey()!= null) {			//Pair<Integer, Vm> migrated			
+			String remod = ((AppModule)migrated.getValue()).getName();
+			this.moduledeadline.remove(remod);			
+			if((this.getName().startsWith("d-"))||(this.getName().startsWith("proxy-server"))){
+				System.out.println(this.getName()+ "  migrated mod " + remod +" vmlist "+  this.getVmList().size());
+				for (int i=0; i<migrated.getKey(); i++) {			// remove all instances
+					this.appToModulesMap.get("ECG").remove(remod);
+					this.getVmAllocationPolicy().deallocateHostForVm(migrated.getValue());
+					this.getVmList().remove(migrated.getValue());
+				}
+				/*
+				System.out.println(this.getName() + " befor vmlist size " 	+ this.getVmList().size());
+				System.out.println("vmlist  " + this.getVmList());
+				List<Vm> myrevm = new ArrayList<Vm>();
+				for( Vm revm: this.getVmList()) {					
+					if (((AppModule)revm).getName().equals(remod)) {
+						myrevm.add(revm);
+						}
+					}
+				for(Vm revm:myrevm) {
+					this.getVmAllocationPolicy().deallocateHostForVm(revm);
+					this.getVmList().remove(revm);
+				}				
+				System.out.println(this.getVmList().size()+ " " + this.getVmList()) ;
+				
+			}
+			else {				// mobile remove one instance 
+				this.appToModulesMap.get("ECG").remove(remod);
+				this.getVmAllocationPolicy().deallocateHostForVm(migrated.getValue());
+				this.getVmList().remove(migrated.getValue());			
+			}			
+			
+			//System.out.println(this.getName() + " after remove vmlist size " 	+ this.getVmList().size());
+			//System.out.println("vmlist  " + this.getVmList());
+			System.out.println(this.getName()+ "  appToModulesMap" + this.appToModulesMap.get("ECG") + "  " + remod + " moduledeadline "+ moduledeadline);
+			System.out.println();
+			*/
+		//}
+	
+////////////////////////////////////////////////////////////////////////////////////////////
+	//for(Pair<Integer,String> p: this.appToModulesMapUsers.get("ECG")){
+	//if(p.getKey()==9) { continue;} //if(id==9) { //"m-0-1" //System.out.println("m-0-1 fixed on dept ");
+	
+	//Pair<Integer, String> devmod = new Pair<Integer, String>( migrated.getKey(),((AppModule)migrated.getValue()).getName());
+	/*	Pair<Integer,Vm> migrated= checkDevicePerformance();  // userid, module
+	if(migrated!= null) {	//for (PowerHost host : this.<PowerHost> getHostList()) { //System.out.println("return migrated  " +((AppModule)migrated).getName());	//for(int id: idOfEndDevices) {		if(id==this.getId()) {
+		//System.out.println("return migrated idofenddevice " + migrated.getKey() +this.getName()+ this.getId() + " module "+ ((AppModule)migrated.getValue()).getName());		  	
+		
+		this.getVmAllocationPolicy().deallocateHostForVm(migrated.getValue());
+		this.getVmList().remove(migrated.getValue());
+		
+		//Map<String, List<String>> appToModulesMap;  //appname, list of modulenames
+		//System.out.println("befor rmigration this.appToModulesMap " + this.appToModulesMap);
+		this.appToModulesMap.get("ECG").remove(((AppModule)migrated.getValue()).getName());				
+		
+		//System.out.println("appToModulesMapUsers " +appToModulesMapUsers);		
+		Pair<Integer, String> devmod = new Pair<Integer, String>( migrated.getKey(),((AppModule)migrated.getValue()).getName());
+		this.appToModulesMapUsers.get("ECG").remove(devmod);						
+		//System.out.println("after remove usermod appToModulesMapUsers " +this.appToModulesMapUsers);
+		
+			/*for(Pair<Integer, String> p : this.appToModulesMapUsers.get("ECG")) {					
+				if((p.getKey()==migrated.getKey())&&(p.getValue()==((AppModule)migrated.getValue()).getName())) {
+					System.out.println("befor migration appToModulesMapUsersMob " +appToModulesMapUsers);
+					appToModulesMapUsers.get("ECG").remove(p);
+					System.out.println("after migration remove usermod from mob appToModulesMapUsersMob " +appToModulesMapUsers);
+				}			
+			} */
+//		}
+	//Map<String, Object> migrate = new HashMap<String, Object>(); //data is a Map<String, Object>")					
+	//migrate.put("vm", (Vm)myvm);
+	//migrate.put("host",PHost);
+	//migrate.put("datacenter",PHost.getDatacenter());
+	//System.out.println(this.getName()+" datacenterid " +this.getId()+" hostid "+this.getHost().getId()+ " will migrate vm "+ myvm.getId()+ MOD.getName()+ " to host "+ PHost.getId()+" datacenter "+ PHost.getDatacenter().getName() + " migrate[] = "+migrate);
+	//sendNow(this.getId(),FogEvents.RELEASE_OPERATOR, migrate); // calls	processOperatorRelease(ev);
+	//if (MOD.getName()=="Client") {
+		//break; //return null;						
+	//} 
+	/*		//System.out.println("returened mobmodu" + miguservm);
+	 			Integer idOfEndDevice = this.getId();
+						Pair<Integer, String> devmod = new Pair<Integer, String>(idOfEndDevice, MOD.getName());
+						appToModulesMapUsers.get("ECG").add(devmod);						
+						System.out.println("after migration add usermod to dept appToModulesMapUsersDept " +appToModulesMapUsersDept);
+						//if(appToModulesMapUsersMob.get("ECG").contains(idOfEndDevice))
+						for(Pair<Integer, String> p : appToModulesMapUsersMob.get("ECG")) {							
+							if((p.getKey()==idOfEndDevice)&&(p.getValue()==MOD.getName())) {
+								System.out.println("befor migration appToModulesMapUsersMob " +appToModulesMapUsersMob);
+								appToModulesMapUsersMob.get("ECG").remove(p);
+								System.out.println("after migration remove usermod from mob appToModulesMapUsersMob " +appToModulesMapUsersMob);
+								}
+							System.out.println("hiiiiiiiiiiiiiiiiiiii");
+							} */		
+						//System.out.println("after migration remove usermod from mob appToModulesMapUsersMob " +appToModulesMapUsersMob);
+						//System.out.println("returened idOfEndDevice, vm " + this.getId() + myvm.getName());
+					//Pair<Integer, Vm> migrated = new Pair<Integer, Vm>(this.getId(), (Vm)myvm);
+			//Map<String, List<String>> appToModulesMap;  //appname, list of modulenames
+			//System.out.println("befor rmigration this.appToModulesMap " + this.appToModulesMap);
+			//System.out.println("appToModulesMapUsers " +appToModulesMapUsers);		
+			 	
+		//System.out.println(this.getName()+ "  deadlineinfo " +this.deadlineInfo);
+		//System.out.println("Appmoduledeadline" +this.Appmoduledeadline);
+		//System.out.println("moduledeadline" +this.moduledeadline);
+		//System.out.println("deadlineInfomodule" +this.deadlineInfomodule);
+		//System.out.println(this.getName()+ " appToModulesMapUsers" +this.appToModulesMapUsers);
+		
+		//List<Pair<Integer,String>> myusersECG = this.appToModulesMapUsers.get("ECG");
+	/*
+	Map<Vm,Integer> VmListPrty = new HashMap<Vm,Integer>();  // mobile id need deadline double
+	for (Vm vm : this.getHost().getVmList()) {
+		MOD= (AppModule)vm;
+		VmListPrty.put(MOD, MOD.getPrty());
+	}
+	System.out.println("mobile "+ this.getName() +" modListPrty " +VmListPrty);
+	Map<Vm, Integer> prioVmListPrty = VmListPrty.entrySet()
+         .stream().sorted(Map.Entry.comparingByValue())
+         .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));
+	System.out.println("mobile "+ this.getName() +" prioVmListPrty " + prioVmListPrty );
+	for(Vm myvm : prioVmListPrty.keySet()) {
+		MOD=(AppModule)myvm;
+		System.out.println("migrating " +MOD.getName()+ " out of mobile "+ this.getId());
+		if (MOD.getName()=="Client") {
+			break; //return null;						
+		}
+		*/
+	//Log.printLine("VmListPrty "+ ((AppModule)vm).getName()+ " prty is "+ ((AppModule)vm).getPrty());						
+	//MOD = (AppModule)getHost().getVmList().get(0);
+	//for(Vm vm :VmListPrty.keySet())
+					//Log.printLine("VmListPrty "+ ((AppModule)vm).getName()+ " prty is "+ ((AppModule)vm).getPrty());				
+					//Log.printLine("prioVmListPrty "+ ((AppModule)vm).getName()+ " prty is "+ ((AppModule)vm).getPrty());
+				//Vm myvm = Map.Entry. prioVmListPrty;
+	//if(PDev.getVmAllocationPolicy().allocateHostForVm(MOD,PHost)) {
+	//this.getVmAllocationPolicy().deallocateHostForVm(myvm);					
+	//this.getVmList().remove(myvm);
+	 //FogEvents.APP_SUBMIT // calls 	processAppSubmit(ev);
+	//	Application app = (Application)ev.getData();
+	//protected Map<String, Application> applicationMap;
+	//System.out.println("applicationMap  " +applicationMap);
+	//sendNow(PDev.getId(),FogEvents.APP_SUBMIT, applicationMap.get(0));
+	//sendNow(PDev.getId(), FogEvents.LAUNCH_MODULE, myvm); //calls processModuleArrival(ev);
+	//System.out.println("vmhost "+ myvm.getHost() +"hostvmlist "+ this.getVmList());
+	//PDev.getVmAllocationPolicy().allocateHostForVm(MOD,PHost);					
+	//PHost.addMigratingInVm(myvm);  //myvm.setInMigration(true);
+	//if(!PHost.getVmList().contains(myvm)) {
+		//PHost.getVmList().add(myvm);											
+	//}					
+	//System.out.println("PHost.getVmList() "+PHost.getVmList());
+	//PDev.updateAllocatedMips(MOD.getName());
+	//this.setSchedulingInterval(schedulingInterval);//Log.printLine("VM #" + myvm.getId() + " has been deallocated from host #" + host.getId()+ " device "+ this.getName()+ " try to allocate VM # " + myvm.getId() + " to host #" + PHost.getId()+ " device "+ PDev.getName());									
+	//Log.printLine(((AppModule)myvm).getName() + " has been migrated, Migration of VM  " +myvm.getId()+ " to Host  " + PHost.getId()+ " is completed" + CloudSim.clock());	
+//////////////////////////////////end ragaa  checkDevicePerformance() /////////////////////////////////////
+	
+	protected void checkCloudletCompletion() {
+		//System.out.println("fogdevice checkCloudletCompletion--------------------------");
+		boolean cloudletCompleted = false;
+		List<? extends Host> list = getVmAllocationPolicy().getHostList();
+		for (int i = 0; i < list.size(); i++) {
+			Host host = list.get(i);
+			for (Vm vm : host.getVmList()) {
+				//System.out.println(host.getDatacenter().getName()+" host"+ host.getId()+ "vm "+ vm.getId());
+				while (vm.getCloudletScheduler().isFinishedCloudlets()) {
+					Cloudlet cl = vm.getCloudletScheduler().getNextFinishedCloudlet();
+					//System.out.println(host.getDatacenter().getName()+" host"+ host.getId()+ "vm "+ vm.getId() + " finished cl  "+cl);
+					if (cl != null) {						
+						cloudletCompleted = true;
+						Tuple tuple = (Tuple)cl;
+						TimeKeeper.getInstance().tupleEndedExecution(tuple);
+						//TimeKeeper.getInstance().tupleEndedExecutioncloudlets(tuple);  // ragaa //////////////
+						Application application = getApplicationMap().get(tuple.getAppId());
+						Logger.debug(getName(), "Completed execution of tuple "+tuple.getCloudletId()+"on "+tuple.getDestModuleName());
+						//System.out.println(getName()+ "Completed execution of tuple "+tuple.getCloudletId()+"source "+tuple.getSourceModuleId()+" dest "+tuple.getDestModuleName()+"tuple module copy map"+tuple.getModuleCopyMap());
+						List<Tuple> resultantTuples = application.getResultantTuples(tuple.getDestModuleName(), tuple, getId(), vm.getId());
+						//System.out.println("resultantTuples "+ resultantTuples);
+						for(Tuple resTuple : resultantTuples){							
+							resTuple.setModuleCopyMap(new HashMap<String, Integer>(tuple.getModuleCopyMap()));
+							//System.out.println("source " + resTuple.getSrcModuleName()+" des "+resTuple.getDestModuleName()+" ModuleCopyMap "+ resTuple.getModuleCopyMap());
+							
+							resTuple.getModuleCopyMap().put(((AppModule)vm).getName(), vm.getId());
+							//System.out.println("ModuleCopyMap "+ resTuple.getModuleCopyMap());
+							
+							updateTimingsOnSending(resTuple);
+							sendToSelf(resTuple);
+						}
+						sendNow(cl.getUserId(), CloudSimTags.CLOUDLET_RETURN, cl);
+					}
+				}
+			}
+		}
+		if(cloudletCompleted)
+			updateAllocatedMips(null);
+	}
+	/////////////////////////////////////////////////////////////////////
+	protected void updateTimingsOnSending(Tuple resTuple) {
+		// TODO ADD CODE FOR UPDATING TIMINGS WHEN A TUPLE IS GENERATED FROM A PREVIOUSLY RECIEVED TUPLE. 
+		// WILL NEED TO CHECK IF A NEW LOOP STARTS AND INSERT A UNIQUE TUPLE ID TO IT.
+		String srcModule = resTuple.getSrcModuleName();
+		String destModule = resTuple.getDestModuleName();
+		//System.out.println();
+		//System.out.println("updateTimingsOnSending------------------------------- srcmod "+ srcModule+ " destModule "+destModule);
+		for(AppLoop loop : getApplicationMap().get(resTuple.getAppId()).getLoops()){
+			//System.out.println(loop.toString()+ loop.hasEdge(srcModule, destModule));
+			if(loop.hasEdge(srcModule, destModule) && loop.isStartModule(srcModule)){				
+				int tupleId = TimeKeeper.getInstance().getUniqueId();
+				resTuple.setActualTupleId(tupleId);
+				if(!TimeKeeper.getInstance().getLoopIdToTupleIds().containsKey(loop.getLoopId()))
+					TimeKeeper.getInstance().getLoopIdToTupleIds().put(loop.getLoopId(), new ArrayList<Integer>());
+				TimeKeeper.getInstance().getLoopIdToTupleIds().get(loop.getLoopId()).add(tupleId);
+				TimeKeeper.getInstance().getEmitTimes().put(tupleId, CloudSim.clock());
+				
+				//Logger.debug(getName(), "\tSENDING\t"+tuple.getActualTupleId()+"\tSrc:"+srcModule+"\tDest:"+destModule);
+				//System.out.println("resultanttuplegotid "+getName()+ "SENDING"+ tupleId +"\tSrc:"+srcModule+"\tDest:"+destModule);				
+			}
+			//System.out.println(getName()+ "SENDING restuple.Actualid "+ resTuple.getActualTupleId() +"\tSrc:"+srcModule+"\tDest:"+destModule);
+		}
+	}
+
+	protected int getChildIdWithRouteTo(int targetDeviceId){
+		for(Integer childId : getChildrenIds()){
+			if(targetDeviceId == childId)
+				return childId;
+			if(((FogDevice)CloudSim.getEntity(childId)).getChildIdWithRouteTo(targetDeviceId) != -1)
+				return childId;
+		}
+		return -1;
+	}
+	
+	protected int getChildIdForTuple(Tuple tuple){
+		if(tuple.getDirection() == Tuple.ACTUATOR){
+			int gatewayId = ((Actuator)CloudSim.getEntity(tuple.getActuatorId())).getGatewayDeviceId();
+			return getChildIdWithRouteTo(gatewayId);
+		}
+		return -1;
+	}
+//************************************source code///////////////////	
+/*	protected void updateAllocatedMips(String incomingOperator){
+		getHost().getVmScheduler().deallocatePesForAllVms();		
+		for(final Vm vm : getHost().getVmList()){
+			if(vm.getCloudletScheduler().runningCloudlets() > 0 || ((AppModule)vm).getName().equals(incomingOperator)){
+				getHost().getVmScheduler().allocatePesForVm(vm, new ArrayList<Double>(){
+					protected static final long serialVersionUID = 1L;
+				{add((double) getHost().getTotalMips());}});
+			}else{
+				getHost().getVmScheduler().allocatePesForVm(vm, new ArrayList<Double>(){
+					protected static final long serialVersionUID = 1L;
+				{add(0.0);}});
+			}
+		}		
+		updateEnergyConsumption();
+		
+	} */
+//////////////////////////////////////ragaa code //////////////////////////////////////////////////////////////
+	protected void updateAllocatedMips(String incomingOperator){
+		//System.out.println("fogdevice updateAllocatedMips host "+ this.getHost().getId()+  "incomingOperator "+ incomingOperator+ "  VmList : " +this.getHost().getVmList());
+		getHost().getVmScheduler().deallocatePesForAllVms();
+		Vm myincomingvm= null;
+		AppModule myAppModule = null;
+		for(final Vm vm : getHost().getVmList()) {
+			if (((AppModule)vm).getName().equals(incomingOperator)) {
+				myincomingvm= vm;
+				myAppModule= ((AppModule)myincomingvm);			
+			}
+		}
+		/*
+		//updateModuleInstanceCount(SimEvent ev)	ModuleLaunchConfig config = (ModuleLaunchConfig)ev.getData();
+		//public ModuleLaunchConfig(AppModule module, int instanceCount){
+		//if(getName().equals("d-0") && tuple.getTupleType().equals("SENSOR_DATA")){
+		//if(getName().equals("d-0") && tuple.getTupleType().equals("FILTERED_DATA")){
+		//AppModule dest= getModuleByName(tuple.getDestModuleName());		
+		//Map<AppModule, Integer> modlunch = new HashMap<AppModule, Integer>();
+		//modlunch.put(myAppModule, ++finst); //modlunch.put(myAppModule, ++minst);
+		Object[] data = new Object[2];
+		data[0] = myAppModule;				
+		if(getName().equals("d-0") && incomingOperator=="Filtering"){
+			data[1] = ++finst;
+			//System.out.println(this.getName()+incomingOperator+ data[0]+data[1]);
+			sendNow(this.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();			
+		}
+		if(getName().equals("d-0") && incomingOperator=="Monitoring"){
+			data[1] = ++minst;
+			//System.out.println(this.getName()+incomingOperator+ data);
+			sendNow(this.getId(),FogEvents.LAUNCH_MODULE_INSTANCE,data);  // calls updateModuleInstanceCount();			
+		}*/
+		
+		for(final Vm vm : getHost().getVmList()){
+			if(vm.getCloudletScheduler().runningCloudlets() > 0 || ((AppModule)vm).getName().equals(incomingOperator)){
+				getHost().getVmScheduler().allocatePesForVm(vm, new ArrayList<Double>(){
+					protected static final long serialVersionUID = 1L;
+				{add((double) getHost().getTotalMips());}});
+				//System.out.println("allocate "+ ((AppModule)vm).getName()+ " totalmips"+ getHost().getTotalMips());
+			}else{
+				getHost().getVmScheduler().allocatePesForVm(vm, new ArrayList<Double>(){
+					protected static final long serialVersionUID = 1L;
+				{add(0.0);}});
+			}
+		}
+		
+		updateEnergyConsumption();		
+	}
+	//System.out.println("myincomingvm "+ myincomingvm + " myAppModule" +myAppModule);		
+	//if (this.getHost().getVmsMigratingIn().contains(myincomingvm)) {
+		//System.out.println("migrated " + incomingOperator);
+		//myincomingvm.setInMigration(true);}
+	//System.out.println(" running cloudlets " + myincomingvm.getCloudletScheduler().runningCloudlets());
+	//System.out.println("updateAllocatedMips host "+ this.getHost().getId()+ "  VmList : " +this.getHost().getVmList());
+////////////////////////////////////////////////////////////////////////////////////////////////////
+	private void updateEnergyConsumption() {
+		double totalMipsAllocated = 0;
+		//System.out.println("fogdevice updateEnergyConsumption "+this.getName()+ " host "+getHost().getId()); //+ "  "+ getHost().getVmList()
+		for(final Vm vm : getHost().getVmList()){
+			AppModule operator = (AppModule)vm;
+			operator.updateVmProcessing(CloudSim.clock(), getVmAllocationPolicy().getHost(operator).getVmScheduler()
+					.getAllocatedMipsForVm(operator));			
+			totalMipsAllocated += getHost().getTotalAllocatedMipsForVm(vm);
+			//System.out.println(operator.getName() +"   totalMipsAllocated to the host  "+ totalMipsAllocated);
+		}
+		double timeNow = CloudSim.clock();
+		double currentEnergyConsumption = getEnergyConsumption();
+		double newEnergyConsumption = currentEnergyConsumption + (timeNow-lastUtilizationUpdateTime)*getHost().getPowerModel().getPower(lastUtilization);
+		setEnergyConsumption(newEnergyConsumption);
+		//System.out.println("getEnergyConsumption "+getEnergyConsumption());
+	
+		/*if(getName().equals("d-0")){
+			System.out.println("------------------------");
+			System.out.println("Utilization = "+lastUtilization);
+			System.out.println("Power = "+getHost().getPowerModel().getPower(lastUtilization));
+			System.out.println(timeNow-lastUtilizationUpdateTime);
+		}*/
+		
+		double currentCost = getTotalCost();
+		double newcost = currentCost + (timeNow-lastUtilizationUpdateTime)*getRatePerMips()*lastUtilization*getHost().getTotalMips();
+		setTotalCost(newcost);
+		
+		lastUtilization = Math.min(1, totalMipsAllocated/getHost().getTotalMips());
+		lastUtilizationUpdateTime = timeNow;
+		
+	}
+	//setEnergyConsumption(getHost().getPowerModel().getStaticPower());  // ragaa update it at foglinearpowermodel and powermodel classes
+	//System.out.println("static power EnergyConsumption "+getEnergyConsumption());
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+	protected void processAppSubmit(SimEvent ev) {
+		Application app = (Application)ev.getData();
+		applicationMap.put(app.getAppId(), app);
+	}
+
+	protected void addChild(int childId){
+		if(CloudSim.getEntityName(childId).toLowerCase().contains("sensor"))
+			return;
+		if(!getChildrenIds().contains(childId) && childId != getId())
+			getChildrenIds().add(childId);
+		if(!getChildToOperatorsMap().containsKey(childId))
+			getChildToOperatorsMap().put(childId, new ArrayList<String>());
+	}
+	
+	protected void updateCloudTraffic(){
+		int time = (int)CloudSim.clock()/1000;
+		if(!cloudTrafficMap.containsKey(time))
+			cloudTrafficMap.put(time, 0);
+		cloudTrafficMap.put(time, cloudTrafficMap.get(time)+1);
+	}
+	
+	protected void sendTupleToActuator(Tuple tuple){
+		/*for(Pair<Integer, Double> actuatorAssociation : getAssociatedActuatorIds()){
+			int actuatorId = actuatorAssociation.getFirst();
+			double delay = actuatorAssociation.getSecond();
+			if(actuatorId == tuple.getActuatorId()){
+				send(actuatorId, delay, FogEvents.TUPLE_ARRIVAL, tuple);
+				return;
+			}
+		}
+		int childId = getChildIdForTuple(tuple);
+		if(childId != -1)
+			sendDown(tuple, childId);*/
+		for(Pair<Integer, Double> actuatorAssociation : getAssociatedActuatorIds()){
+			int actuatorId = actuatorAssociation.getFirst();
+			double delay = actuatorAssociation.getSecond();
+			String actuatorType = ((Actuator)CloudSim.getEntity(actuatorId)).getActuatorType();
+			if(tuple.getDestModuleName().equals(actuatorType)){
+				send(actuatorId, delay, FogEvents.TUPLE_ARRIVAL, tuple);
+				return;
+			}
+		}
+		for(int childId : getChildrenIds()){
+			sendDown(tuple, childId);
+		}
+	}
+
+	int numClients=0;
+/////////////////////////////////////////////////////////////////////////////////
+///////////////////////////update to support migrated vm ragaa///////////////////////
+	
+	protected void processTupleArrival(SimEvent ev){
+		
+
+		Tuple tuple = (Tuple)ev.getData();
+		/*		 
+		System.out.println("fogdevice processTupleArrival_______________________ ev "+ ev+ " evsource "+ev.getSource()+ " evdest "+ ev.getDestination()+ " evdata "+ev.getData());
+		Integer des= ev.getDestination();
+		Integer src =ev.getSource();
+		String dev= CloudSim.getEntityName(des);		
+		idOfEndDevices.contains(des);
+		
+		//System.out.println("src" + src+ "des"+ des+ "dev"+ dev+	idOfEndDevices.contains(des));
+
+		//System.out.println(getName()+ " Received tuple "+tuple.getCloudletId()+"with tupleType = "+tuple.getTupleType()+"\t| Source : "+
+			//CloudSim.getEntityName(ev.getSource())+"|Dest : "+CloudSim.getEntityName(ev.getDestination()));
+		//if(getName().startsWith("m") && deviceById.containsValue(CloudSim.getEntityName(ev.getDestination()))){ //&& tuple.getTupleType().equals("_SENSOR")){
+		/*
+		if(getName().startsWith("m") && idOfEndDevices.contains(des)){ //&& tuple.getTupleType().equals("_SENSOR")){
+			Pair<Integer, String> p= new Pair<Integer, String>(des,((AppModule)ev.getData()).getName());
+			appToModulesMapUsers.get("ECG").add(p);
+			System.out.println(this.getName()+ " appToModulesMapUsers "+ appToModulesMapUsers);
+			
+			 //deadlineInfomodule.put(this.getId(), value)
+		}
+		
+		//if(getName().startsWith("d") &&&& deviceById.containsKey(des)&& deviceById.containsValue(CloudSim.getEntityName(ev.getDestination()))){ //&& tuple.getTupleType().equals("_SENSOR")){
+			if(getName().startsWith("d") && tuple.getTupleType().equals("_SENSOR")){
+				
+				String mod= ((AppModule)ev.getData()).getName();
+				System.out.println(this.getName()+ mod);
+				Pair<Integer, String> p= new Pair<Integer, String>(src,mod);
+				if(!this.appToModulesMapUsers.get("ECG").contains(p))
+					this.appToModulesMapUsers.get("ECG").add(p);
+				System.out.println(this.getName()+ " appToModulesMapUsers "+ appToModulesMapUsers);
+			}
+			if(getName().startsWith("proxy")&& tuple.getTupleType().equals("ECG_REPORT")){
+				String mod= ((AppModule)ev.getData()).getName();
+				Pair<Integer, String> p= new Pair<Integer, String>(src,mod);
+				if(!this.appToModulesMapUsers.get("ECG").contains(p))
+					appToModulesMapUsers.get("ECG").add(p);
+				System.out.println(this.getName()+ " appToModulesMapUsers "+ appToModulesMapUsers);
+			}*/
+			//System.out.println(this.getName()+ "processtuplearrival appToModulesMapUsers "+ appToModulesMapUsers);
+		//}
+			/*///////////ragaa code to fill apptomodulesmapusers		
+		if(getName().equals("d-0") && !appToModulesMapUsersDept.containsKey(tuple.getAppId()))
+			appToModulesMapUsers.put(this.getActiveApplications().get(0), new HashMap<Integer,List<String>>());
+		System.out.println("appToModulesMapUsers "+ appToModulesMapUsers);
+		if (getName().equals("d-0") && idOfEndDevices.contains(tuple.getSourceDeviceId())) {
+			if(getName().equals("d-0") &&!appToModulesMapUsers.get(tuple.getAppId()).containsKey(tuple.getSourceDeviceId()))
+				appToModulesMapUsers.get(tuple.getAppId()).put(tuple.getSourceDeviceId(), new ArrayList<String>());
+			appToModulesMapUsers.get(tuple.getAppId()).get(tuple.getSourceDeviceId()).add(tuple.getDestModuleName());
+		}
+		System.out.println("appToModulesMapUsers "+appToModulesMapUsers);
+//////////////////////////////////////*/
+		
+		if(getName().equals("cloud")){
+			updateCloudTraffic();
+		}		
+		/*if(getName().equals("d-0") && tuple.getTupleType().equals("_SENSOR")){
+			System.out.println(++numClients);
+		}*/
+		Logger.debug(getName(), "Received tuple "+tuple.getCloudletId()+"with tupleType = "+tuple.getTupleType()+"\t| Source : "+
+		CloudSim.getEntityName(ev.getSource())+"|Dest : "+CloudSim.getEntityName(ev.getDestination()));
+		
+		send(ev.getSource(), CloudSim.getMinTimeBetweenEvents(), FogEvents.TUPLE_ACK);
+		
+		if(FogUtils.appIdToGeoCoverageMap.containsKey(tuple.getAppId())){
+		}
+		
+		if(tuple.getDirection() == Tuple.ACTUATOR){
+			sendTupleToActuator(tuple);
+			return;
+		}
+		
+		if(getHost().getVmList().size() > 0){
+			final AppModule operator = (AppModule)getHost().getVmList().get(0);
+			//System.out.println("host " + getHost().getId()+ operator.getName()+ " vmlist "+ getHost().getVmList());
+			if(CloudSim.clock() > 0){
+				getHost().getVmScheduler().deallocatePesForVm(operator);
+				getHost().getVmScheduler().allocatePesForVm(operator, new ArrayList<Double>(){
+					protected static final long serialVersionUID = 1L;
+				{add((double) getHost().getTotalMips());}});
+			}
+		}		
+		
+		if(getName().equals("cloud") && tuple.getDestModuleName()==null){
+			sendNow(getControllerId(), FogEvents.TUPLE_FINISHED, null);
+		}
+		
+		if(appToModulesMap.containsKey(tuple.getAppId())){
+		//if(appToModulesMapUsers.containsKey(tuple.getAppId())){
+			//System.out.println("appToModulesMap "+ appToModulesMap);
+			if(appToModulesMap.get(tuple.getAppId()).contains(tuple.getDestModuleName())){
+			//if(appToModulesMapUsers.get(tuple.getAppId()).get(tuple.getSourceDeviceId()).contains(tuple.getDestModuleName())){
+				//System.out.println("tuple.getDestModuleName "+tuple.getDestModuleName());
+				int vmId = -1;
+				for(Vm vm : getHost().getVmList()){  // getDatacenter().getHost().getVmList()){
+					//System.out.println("destination module vmid "+vm.getId());
+					if(((AppModule)vm).getName().equals(tuple.getDestModuleName())) {
+						vmId = vm.getId();						
+					}				
+				}
+				//System.out.println("tuple.DestModuleName "+tuple.getDestModuleName()+
+					//"destination vmId"+vmId+" ModuleCopyMap"+ tuple.getModuleCopyMap());
+				if(vmId < 0
+						|| (tuple.getModuleCopyMap().containsKey(tuple.getDestModuleName()) && 
+								tuple.getModuleCopyMap().get(tuple.getDestModuleName())!=vmId )){
+					//System.out.println("hiiiii am ii here ??");
+					return;
+				}
+				
+				tuple.setVmId(vmId);
+				//Logger.error(getName(), "Executing tuple for operator " + moduleName);
+
+				//System.out.println(getName()+ " Executing tuple for dest operator " + tuple.getDestModuleName()+" vmid "+vmId+  " tuple "+ tuple);
+				
+				updateTimingsOnReceipt(tuple);				
+				executeTuple(ev, tuple.getDestModuleName());
+				
+			}// else if destination module not exist on application to module map
+			else if(tuple.getDestModuleName()!=null){
+				if(tuple.getDirection() == Tuple.UP)
+					sendUp(tuple);
+				else if(tuple.getDirection() == Tuple.DOWN){
+					for(int childId : getChildrenIds())
+						sendDown(tuple, childId);
+				}
+			}else{
+			//	System.out.println("destmodule= null??");
+				sendUp(tuple);
+			}
+		}// else if apptomodule map does not contain the application
+		else{
+			if(tuple.getDirection() == Tuple.UP)				
+				sendUp(tuple);
+			
+			else if(tuple.getDirection() == Tuple.DOWN){
+				for(int childId : getChildrenIds())
+					sendDown(tuple, childId);
+				}
+			}
+		}
+	/*
+	 if () {  //vm migrated  module.getHost().getId()!= this.getId()			 
+			int type = CloudSimTags.CLOUDLET_MOVE_ACK;
+			int[] array = new int[5];			
+			array[0]= (int)tuple.getCloudletId(); //int cloudletId;
+			array[1]= (int)tuple.getUserId();	 //int userId ;
+			array[2]= (int)tuple.getVmId(); 	//int vmId;
+			array[3]= (int)tuple.getVmId();    // int vmDestId;
+			array[4]= (int)module.getHost().getId();   //int destId;		
+			System.out.println("fogdevice process cloudletmove " +"module host"+module.getHost().getId()+ "this id "+this.getId());
+			System.out.println("array"+ tuple.getCloudletId()+ " ?? " + array[0]+array[1]+array[2]+array[3]+array[4]);
+			processCloudletMove(array, type);
+		}		
+	 */
+///////source code////////////////////////////////////////////////////////////////////////ragaa
+	/*protected void processTupleArrival(SimEvent ev){
+		Tuple tuple = (Tuple)ev.getData();
+		//System.out.println("fogdevice processTupleArrival========================");
+		System.out.println("fogdevice processTupleArrival_______________________ ev "+ ev);
+		System.out.println(getName()+  "Received tuple "+tuple.getCloudletId()+"with tupleType = "+tuple.getTupleType()+"\t| Source : "+
+				CloudSim.getEntityName(ev.getSource())+"|Dest : "+CloudSim.getEntityName(ev.getDestination()));
+		
+		if(getName().equals("cloud")){
+			updateCloudTraffic();
+		}
+		
+		///*if(getName().equals("d-0") && tuple.getTupleType().equals("_SENSOR")){
+			//System.out.println(++numClients);
+		//}
+		Logger.debug(getName(), "Received tuple "+tuple.getCloudletId()+"with tupleType = "+tuple.getTupleType()+"\t| Source : "+
+		CloudSim.getEntityName(ev.getSource())+"|Dest : "+CloudSim.getEntityName(ev.getDestination()));
+		
+		send(ev.getSource(), CloudSim.getMinTimeBetweenEvents(), FogEvents.TUPLE_ACK);
+		
+		if(FogUtils.appIdToGeoCoverageMap.containsKey(tuple.getAppId())){
+		}
+		
+		if(tuple.getDirection() == Tuple.ACTUATOR){
+			sendTupleToActuator(tuple);
+			return;
+		}
+		
+		if(getHost().getVmList().size() > 0){
+			final AppModule operator = (AppModule)getHost().getVmList().get(0);
+			//System.out.println("processtuplearrival host " + getHost().getId()+ operator.getName()+ " vmlist "+ getHost().getVmList());
+			if(CloudSim.clock() > 0){
+				getHost().getVmScheduler().deallocatePesForVm(operator);
+				getHost().getVmScheduler().allocatePesForVm(operator, new ArrayList<Double>(){
+					protected static final long serialVersionUID = 1L;
+				{add((double) getHost().getTotalMips());}});
+			}
+		}		
+		
+		if(getName().equals("cloud") && tuple.getDestModuleName()==null){
+			sendNow(getControllerId(), FogEvents.TUPLE_FINISHED, null);
+		}
+		
+		if(appToModulesMap.containsKey(tuple.getAppId())){
+			if(appToModulesMap.get(tuple.getAppId()).contains(tuple.getDestModuleName())){
+				//System.out.println("tuple.getDestModuleName "+tuple.getDestModuleName());
+				int vmId = -1;
+				for(Vm vm : getHost().getVmList()){
+					if(((AppModule)vm).getName().equals(tuple.getDestModuleName()))
+						vmId = vm.getId();
+				}
+				if(vmId < 0
+						|| (tuple.getModuleCopyMap().containsKey(tuple.getDestModuleName()) && 
+								tuple.getModuleCopyMap().get(tuple.getDestModuleName())!=vmId )){
+					return;
+				}
+				tuple.setVmId(vmId);
+				//Logger.error(getName(), "Executing tuple for operator " + moduleName);
+				
+				updateTimingsOnReceipt(tuple);
+				//System.out.println(getName() + "processtuplearrival vmid "+vmId+  "tuple"+ tuple); //ragaa
+				
+				executeTuple(ev, tuple.getDestModuleName());
+				
+			}else if(tuple.getDestModuleName()!=null){
+				if(tuple.getDirection() == Tuple.UP)
+					sendUp(tuple);
+				else if(tuple.getDirection() == Tuple.DOWN){
+					for(int childId : getChildrenIds())
+						sendDown(tuple, childId);
+				}
+			}else{
+				//System.out.println("destmodule= null??");
+				sendUp(tuple);
+			}
+		}else{
+			if(tuple.getDirection() == Tuple.UP)				
+				sendUp(tuple);
+			
+			else if(tuple.getDirection() == Tuple.DOWN){
+				for(int childId : getChildrenIds())
+					sendDown(tuple, childId);
+			}
+		}
+	}
+	//end source code/////////////////////////////////////////////////////////////////////////////////////*/
+	protected void updateTimingsOnReceipt(Tuple tuple) {
+		Application app = getApplicationMap().get(tuple.getAppId());
+		String srcModule = tuple.getSrcModuleName();
+		String destModule = tuple.getDestModuleName();		
+		List<AppLoop> loops = app.getLoops();
+		Integer mobileid=this.getId();  		 //ragaa 			
+		for(AppLoop loop : loops){
+			if(loop.hasEdge(srcModule, destModule) && loop.isEndModule(destModule)){				
+				Double startTime = TimeKeeper.getInstance().getEmitTimes().get(tuple.getActualTupleId());
+				if(startTime==null)
+					break;
+				if(!TimeKeeper.getInstance().getLoopIdToCurrentAverage().containsKey(loop.getLoopId())){
+					TimeKeeper.getInstance().getLoopIdToCurrentAverage().put(loop.getLoopId(), 0.0);
+					TimeKeeper.getInstance().getLoopIdToCurrentNum().put(loop.getLoopId(), 0);
+				}
+				if (this.getName().startsWith("m")) {   //ragaa   
+					if(!TimeKeeper.getInstance().getCurrentAverageUser().containsKey(mobileid)){
+					TimeKeeper.getInstance().getCurrentAverageUser().put(mobileid, 0.0);
+					TimeKeeper.getInstance().getCurrentNumUser().put(mobileid, 0);
+					}           //ragaa 
+				}
+				double currentAverage = TimeKeeper.getInstance().getLoopIdToCurrentAverage().get(loop.getLoopId());
+				int currentCount = TimeKeeper.getInstance().getLoopIdToCurrentNum().get(loop.getLoopId());
+				double delay = CloudSim.clock()- TimeKeeper.getInstance().getEmitTimes().get(tuple.getActualTupleId());
+				//TimeKeeper.getInstance().getEmitTimes().remove(tuple.getActualTupleId());
+				double newAverage = (currentAverage*currentCount + delay)/(currentCount+1);
+				TimeKeeper.getInstance().getLoopIdToCurrentAverage().put(loop.getLoopId(), newAverage);
+				TimeKeeper.getInstance().getLoopIdToCurrentNum().put(loop.getLoopId(), currentCount+1);
+				System.out.println("tupleactualtupleid "+ tuple.getActualTupleId()+" tuplecloudletid "+ tuple.getCloudletId()+ " mobileid " + mobileid + " starttime "+ startTime+ "delay "+ delay+ "newaverage "+ newAverage);
+				
+				if (this.getName().startsWith("m")) {  //ragaa 
+					double currentAverageUser = TimeKeeper.getInstance().getCurrentAverageUser().get(loop.getLoopId());
+					int currentCountUser = TimeKeeper.getInstance().getCurrentNumUser().get(loop.getLoopId());
+					double delayUser = CloudSim.clock()- TimeKeeper.getInstance().getEmitTimes().get(tuple.getActualTupleId());
+					TimeKeeper.getInstance().getEmitTimes().remove(tuple.getActualTupleId());
+					double newAverageUser = (currentAverageUser*currentCountUser + delayUser)/(currentCountUser+1);
+					TimeKeeper.getInstance().getCurrentAverageUser().put(loop.getLoopId(), newAverageUser);
+					TimeKeeper.getInstance().getCurrentNumUser().put(loop.getLoopId(), currentCountUser+1);
+					System.out.println("tupactualid "+ tuple.getActualTupleId()+" cloudletid "+ tuple.getCloudletId()+ " Mobid " + mobileid + " starttime "+ startTime+ " delayUser "+ delayUser);
+					System.out.println("currentaverageuser "+currentAverageUser + "currentcountuser "+currentCountUser + "newAverageUser " +newAverageUser);					
+				} //ragaa 
+				TimeKeeper.getInstance().getEmitTimes().remove(tuple.getActualTupleId());
+				break;
+			}
+		}
+	}
+
+///////source module/////////////////////////////////////////////////////////////////////////////
+	/*
+	protected void updateTimingsOnReceipt(Tuple tuple) {
+		Application app = getApplicationMap().get(tuple.getAppId());
+		String srcModule = tuple.getSrcModuleName();
+		String destModule = tuple.getDestModuleName();
+		List<AppLoop> loops = app.getLoops();
+		for(AppLoop loop : loops){
+			if(loop.hasEdge(srcModule, destModule) && loop.isEndModule(destModule)){				
+				Double startTime = TimeKeeper.getInstance().getEmitTimes().get(tuple.getActualTupleId());
+				if(startTime==null)
+					break;
+				if(!TimeKeeper.getInstance().getLoopIdToCurrentAverage().containsKey(loop.getLoopId())){
+					TimeKeeper.getInstance().getLoopIdToCurrentAverage().put(loop.getLoopId(), 0.0);
+					TimeKeeper.getInstance().getLoopIdToCurrentNum().put(loop.getLoopId(), 0);
+				}
+				double currentAverage = TimeKeeper.getInstance().getLoopIdToCurrentAverage().get(loop.getLoopId());
+				int currentCount = TimeKeeper.getInstance().getLoopIdToCurrentNum().get(loop.getLoopId());
+				double delay = CloudSim.clock()- TimeKeeper.getInstance().getEmitTimes().get(tuple.getActualTupleId());
+				TimeKeeper.getInstance().getEmitTimes().remove(tuple.getActualTupleId());
+				double newAverage = (currentAverage*currentCount + delay)/(currentCount+1);
+				TimeKeeper.getInstance().getLoopIdToCurrentAverage().put(loop.getLoopId(), newAverage);
+				TimeKeeper.getInstance().getLoopIdToCurrentNum().put(loop.getLoopId(), currentCount+1);
+				break;
+			}
+		}
+	}
+	*/
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	protected void processSensorJoining(SimEvent ev){
+		send(ev.getSource(), CloudSim.getMinTimeBetweenEvents(), FogEvents.TUPLE_ACK);
+	}
+	//////////////////////////////////////////////////////////////////////////////
+	protected void executeTuple(SimEvent ev, String moduleName){
+		Logger.debug(getName(), "Executing tuple on module "+moduleName);		
+		Tuple tuple = (Tuple)ev.getData();
+		//System.out.println(getName() + "Executing tuple on module "+moduleName+ "ev "+ev + "tuple"+ tuple); //ragaa
+		AppModule module = getModuleByName(moduleName);
+		
+		if(tuple.getDirection() == Tuple.UP){
+			String srcModule = tuple.getSrcModuleName();
+			if(!module.getDownInstanceIdsMaps().containsKey(srcModule))
+				module.getDownInstanceIdsMaps().put(srcModule, new ArrayList<Integer>());
+			if(!module.getDownInstanceIdsMaps().get(srcModule).contains(tuple.getSourceModuleId()))
+				module.getDownInstanceIdsMaps().get(srcModule).add(tuple.getSourceModuleId());
+			
+			int instances = -1;
+			for(String _moduleName : module.getDownInstanceIdsMaps().keySet()){
+				instances = Math.max(module.getDownInstanceIdsMaps().get(_moduleName).size(), instances);
+			}
+			module.setNumInstances(instances);
+		}
+		
+		TimeKeeper.getInstance().tupleStartedExecution(tuple);
+		updateAllocatedMips(moduleName);
+		
+		//System.out.println();
+		//System.out.println("fogdevice executetuple calls processCloudletSubmit() ++++++++++++++++++++++++++++++++++++"); //ragaa
+		processCloudletSubmit(ev, false);
+		//System.out.println();
+		
+		updateAllocatedMips(moduleName);
+		/*for(Vm vm : getHost().getVmList()){
+			Logger.error(getName(), "MIPS allocated to "+((AppModule)vm).getName()+" = "+getHost().getTotalAllocatedMipsForVm(vm));
+		}*/
+	}
+//////////////////////////////////////////////////////////////////////////////////////////////	
+	
+	protected void processModuleArrival(SimEvent ev){
+		idOfEndDevices = this.getApplicationMap().get("ECG").getidOfEndDevices(); // fogdevice list<integer>getidOfEndDevices- setidOfEndDevices
+		deviceById = this.getApplicationMap().get("ECG").getdeviceById();
+		deadlineInfo=this.getApplicationMap().get("ECG").getDeadlineInfo();
+		deadlineInfomodule= this.getApplicationMap().get("ECG").getDeadlineInfomodule();
+		placement= this.getApplicationMap().get("ECG").getplacement();	
+		additionalMipsInfo= this.getApplicationMap().get("ECG").getAdditionalMipsInfo();
+		//System.out.println(" additionalMipsInfo " +additionalMipsInfo);
+		
+		AppModule module = (AppModule)ev.getData();
+		String appId = module.getAppId();
+		//if(((AppModule)ev.getData()).getName()=="Caregiver")
+			//System.out.println("processModuleArrival ==============="+ ev +" module "+ ((AppModule)ev.getData()).getName()+ "ev source "+ deviceById.get(ev.getSource())+ "ev Destination "+ ev.getDestination()+ " "+ deviceById.get(ev.getDestination()).getName());
+		
+		if(!appToModulesMap.containsKey(appId)){
+			appToModulesMap.put(appId, new ArrayList<String>());
+			}
+		appToModulesMap.get(appId).add(module.getName());
+		
+//////////////ragaa code to add users appToModulesMapUsersMob= new HashMap<String, List<Pair<Integer,String>>>(); //ragaa appname, mobid,modulename
+		if(!this.appToModulesMapUsers.containsKey(appId)){
+			this.appToModulesMapUsers.put(appId,  new ArrayList<Pair<Integer,String>>());
+			}
+		
+		List<Pair<Integer,String>>dumappToModulesMapUsers; Pair<Integer,String>ddumappToModulesMapUsers;
+		if (idOfEndDevices.contains(this.getId())) { 
+			moduledeadline = deadlineInfomodule.get(this.getId());
+			dumappToModulesMapUsers= new ArrayList<Pair<Integer,String>>();
+			for(String x: moduledeadline.keySet()) {
+				ddumappToModulesMapUsers= new Pair<Integer,String>(this.getId(),x);
+				dumappToModulesMapUsers.add(ddumappToModulesMapUsers);
+			}			
+			//this.appToModulesMapUsers.put(appId, dumappToModulesMapUsers);  
+			}
+		//if(this.getName().startsWith("proxy"))
+		
+		AppModule mod; Map<AppModule,Double>dumAppmoduledeadline; 
+		if (moduledeadline!= null) {
+			dumAppmoduledeadline= new HashMap<AppModule,Double>();
+			
+			for(String x: moduledeadline.keySet()) {
+				mod = getModuleByName(x);
+				dumAppmoduledeadline.put(mod, moduledeadline.get(x));
+				
+			}
+			this.Appmoduledeadline=dumAppmoduledeadline.entrySet()
+		             .stream().sorted(Map.Entry.comparingByValue())
+		             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));			
+		}
+		
+		if((deviceById.get(ev.getDestination()).getName().startsWith("d-"))){
+			this.moduledeadline.put("Filtering", 10.00);
+			this.moduledeadline.put("Monitoring",5.00);			
+			this.moduledeadline=moduledeadline.entrySet()
+		             .stream().sorted(Map.Entry.comparingByValue())
+		             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));
+		}
+		if((deviceById.get(ev.getDestination()).getName().startsWith("proxy-server"))){
+			this.moduledeadline.put("Filtering", 10.00);
+			this.moduledeadline.put("Monitoring",5.00);
+			this.moduledeadline.put("Caregiver", 0.00);
+			this.moduledeadline=moduledeadline.entrySet()
+		             .stream().sorted(Map.Entry.comparingByValue())
+		             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e1, LinkedHashMap::new));
+		}
+		//	Pair p= new Pair<Integer, String>(ev.getDestination(),((AppModule)ev.getData()).getName());
+		//	appToModulesMapUsers.get(appId).add(p);
+		//}
+		//System.out.println("appToModulesMap "+appToModulesMap+ "         appToModulesMapUsers  " +appToModulesMapUsers);
+		//System.out.println("fogdevice processModuleArrival " + module.getName() +" at "+ this.getName()+ "  all users "+idOfEndDevices);		
+		//System.out.println(this.getName()+ "device id "+ this.getId()+" hostid "+ this.getHost().getId()+ " modulemap"+ appToModulesMap.get(appId));		
+		//appToModulesMapUsers.get(appId).put(idOfEndDevice, module.getName());
+		//System.out.println(appToModulesMap.get(appId));
+		//System.out.println("fogdevice processModuleArrival " + module.getName() +" at "+ this.getName()+ "  appToModulesMapUsers "+ appToModulesMapUsers);
+		
+		//System.out.println("processModuleArrival ======================="+ ev +" "+ ((AppModule)ev.getData()).getName());
+		
+		//dumAppmoduledeadline.clear();
+		//System.out.println("============================================");
+		//		System.out.println("processModuleArrival idOfEndDevices " +idOfEndDevices+ " deviceById "+ deviceById);
+		//System.out.println("DeadlineInfo "+ deadlineInfo);
+		//System.out.println("DeadlineInfomodule "+ deadlineInfomodule);
+		//System.out.println("============================================");
+		//System.out.println("============================================");
+		//System.out.println(this.getName()+ this.getId()+ " moduledeadline "+this.moduledeadline);		
+		//System.out.println("Appmoduledeadline "+ this.Appmoduledeadline);
+		//System.out.println(this.getName()+ " appToModulesMapUsers  "+ this.appToModulesMapUsers);
+		//System.out.println("placement "+  placement);
+/////////////////////////////////////////////////////////////////////////////////////////////////
+		
+		processVmCreate(ev, false); 	//ragaa	//processVmCreate(ev, true);   
+		
+		//System.out.println(module.getName()+"isBeingInstantiated  "+ module.isBeingInstantiated()); //appmodule, vm classes
+		if (module.isBeingInstantiated()) {
+			module.setBeingInstantiated(false);
+		}
+		
+		initializePeriodicTuples(module);  // ragaa gives error still 
+		
+		module.updateVmProcessing(CloudSim.clock(), getVmAllocationPolicy().getHost(module).getVmScheduler()
+				.getAllocatedMipsForVm(module));
+	}
+	/////////////////////////////////////////////////////////////////////	
+	private void initializePeriodicTuples(AppModule module) {
+		String appId = module.getAppId();
+		Application app = getApplicationMap().get(appId);
+		List<AppEdge> periodicEdges = app.getPeriodicEdges(module.getName());
+		//System.out.println("initializePeriodicTuples periodicEdges  " + periodicEdges);
+		for(AppEdge edge : periodicEdges){
+			send(getId(), edge.getPeriodicity(), FogEvents.SEND_PERIODIC_TUPLE, edge);
+		}
+	}
+/////	List<AppEdge> periodicEdges = new ArrayList<AppEdge>();
+		//System.out.println("initializePeriodicTuples" +appId + module.getName()+periodicEdges +app+ this.getName());
+		//periodicEdges= app.getPeriodicEdges(modname);
+		//System.out.println("initializePeriodicTuples periodicEdges  " + periodicEdges);
+////////////////////////////////////////////*/
+	protected void processOperatorRelease(SimEvent ev){
+		//System.out.println("fogdevice processOperatorRelease==========================================");
+		this.processVmMigrate(ev, false);		
+		//this.processVmMigrate(ev, true);
+	}
+	
+	
+	protected void updateNorthTupleQueue(){
+		if(!getNorthTupleQueue().isEmpty()){
+			Tuple tuple = getNorthTupleQueue().poll();
+			sendUpFreeLink(tuple);
+		}else{
+			setNorthLinkBusy(false);
+		}
+	}
+	
+	protected void sendUpFreeLink(Tuple tuple){
+		double networkDelay = tuple.getCloudletFileSize()/getUplinkBandwidth();
+		setNorthLinkBusy(true);
+		send(getId(), networkDelay, FogEvents.UPDATE_NORTH_TUPLE_QUEUE);
+		send(parentId, networkDelay+getUplinkLatency(), FogEvents.TUPLE_ARRIVAL, tuple);
+		NetworkUsageMonitor.sendingTuple(getUplinkLatency(), tuple.getCloudletFileSize());
+	}
+	
+	protected void sendUp(Tuple tuple){
+		if(parentId > 0){
+			if(!isNorthLinkBusy()){
+				sendUpFreeLink(tuple);
+			}else{
+				northTupleQueue.add(tuple);
+			}
+		}
+	}
+	
+	
+	protected void updateSouthTupleQueue(){
+		if(!getSouthTupleQueue().isEmpty()){
+			Pair<Tuple, Integer> pair = getSouthTupleQueue().poll(); 
+			sendDownFreeLink(pair.getFirst(), pair.getSecond());
+		}else{
+			setSouthLinkBusy(false);
+		}
+	}
+	
+	protected void sendDownFreeLink(Tuple tuple, int childId){
+		double networkDelay = tuple.getCloudletFileSize()/getDownlinkBandwidth();
+		//Logger.debug(getName(), "Sending tuple with tupleType = "+tuple.getTupleType()+" DOWN");
+		setSouthLinkBusy(true);
+		double latency = getChildToLatencyMap().get(childId);
+		send(getId(), networkDelay, FogEvents.UPDATE_SOUTH_TUPLE_QUEUE);
+		send(childId, networkDelay+latency, FogEvents.TUPLE_ARRIVAL, tuple);
+		NetworkUsageMonitor.sendingTuple(latency, tuple.getCloudletFileSize());
+	}
+	
+	protected void sendDown(Tuple tuple, int childId){
+		if(getChildrenIds().contains(childId)){
+			if(!isSouthLinkBusy()){
+				sendDownFreeLink(tuple, childId);
+			}else{
+				southTupleQueue.add(new Pair<Tuple, Integer>(tuple, childId));
+			}
+		}
+	}
+	
+/////////////////////////////////////////////////////////////////////	
+	protected void sendToSelf(Tuple tuple){
+		//System.out.println("sendtoself ------------------------------------DATACENTER "+getId()+" TUPLE "+ tuple.getActualTupleId()+ " CALL process tuple arrival");
+		send(getId(), CloudSim.getMinTimeBetweenEvents(), FogEvents.TUPLE_ARRIVAL, tuple);
+		//sendNow(getId(), FogEvents.TUPLE_ARRIVAL, tuple);
+	}
+	
+	public PowerHost getHost(){
+		return (PowerHost) getHostList().get(0);
+	}
+	public int getParentId() {
+		return parentId;
+	}
+	public void setParentId(int parentId) {
+		this.parentId = parentId;
+	}
+	public List<Integer> getChildrenIds() {
+		return childrenIds;
+	}
+	public void setChildrenIds(List<Integer> childrenIds) {
+		this.childrenIds = childrenIds;
+	}
+	public double getUplinkBandwidth() {
+		return uplinkBandwidth;
+	}
+	public void setUplinkBandwidth(double uplinkBandwidth) {
+		this.uplinkBandwidth = uplinkBandwidth;
+	}
+	public double getUplinkLatency() {
+		return uplinkLatency;
+	}
+	public void setUplinkLatency(double uplinkLatency) {
+		this.uplinkLatency = uplinkLatency;
+	}
+	public boolean isSouthLinkBusy() {
+		return isSouthLinkBusy;
+	}
+	public boolean isNorthLinkBusy() {
+		return isNorthLinkBusy;
+	}
+	public void setSouthLinkBusy(boolean isSouthLinkBusy) {
+		this.isSouthLinkBusy = isSouthLinkBusy;
+	}
+	public void setNorthLinkBusy(boolean isNorthLinkBusy) {
+		this.isNorthLinkBusy = isNorthLinkBusy;
+	}
+	public int getControllerId() {
+		return controllerId;
+	}
+	public void setControllerId(int controllerId) {
+		this.controllerId = controllerId;
+	}
+	public List<String> getActiveApplications() {
+		return activeApplications;
+	}
+	public void setActiveApplications(List<String> activeApplications) {
+		this.activeApplications = activeApplications;
+	}
+	public Map<Integer, List<String>> getChildToOperatorsMap() {
+		return childToOperatorsMap;
+	}
+	public void setChildToOperatorsMap(Map<Integer, List<String>> childToOperatorsMap) {
+		this.childToOperatorsMap = childToOperatorsMap;
+	}
+
+	public Map<String, Application> getApplicationMap() {
+		return applicationMap;
+	}
+
+	public void setApplicationMap(Map<String, Application> applicationMap) {
+		this.applicationMap = applicationMap;
+	}
+
+	public Queue<Tuple> getNorthTupleQueue() {
+		return northTupleQueue;
+	}
+
+	public void setNorthTupleQueue(Queue<Tuple> northTupleQueue) {
+		this.northTupleQueue = northTupleQueue;
+	}
+
+	public Queue<Pair<Tuple, Integer>> getSouthTupleQueue() {
+		return southTupleQueue;
+	}
+
+	public void setSouthTupleQueue(Queue<Pair<Tuple, Integer>> southTupleQueue) {
+		this.southTupleQueue = southTupleQueue;
+	}
+
+	public double getDownlinkBandwidth() {
+		return downlinkBandwidth;
+	}
+
+	public void setDownlinkBandwidth(double downlinkBandwidth) {
+		this.downlinkBandwidth = downlinkBandwidth;
+	}
+
+	public List<Pair<Integer, Double>> getAssociatedActuatorIds() {
+		return associatedActuatorIds;
+	}
+
+	public void setAssociatedActuatorIds(List<Pair<Integer, Double>> associatedActuatorIds) {
+		this.associatedActuatorIds = associatedActuatorIds;
+	}
+	
+	public double getEnergyConsumption() {
+		return energyConsumption;
+	}
+
+	public void setEnergyConsumption(double energyConsumption) {
+		this.energyConsumption = energyConsumption;
+	}
+	public Map<Integer, Double> getChildToLatencyMap() {
+		return childToLatencyMap;
+	}
+
+	public void setChildToLatencyMap(Map<Integer, Double> childToLatencyMap) {
+		this.childToLatencyMap = childToLatencyMap;
+	}
+
+	public int getLevel() {
+		return level;
+	}
+
+	public void setLevel(int level) {
+		this.level = level;
+	}
+
+	public double getRatePerMips() {
+		return ratePerMips;
+	}
+
+	public void setRatePerMips(double ratePerMips) {
+		this.ratePerMips = ratePerMips;
+	}
+	public double getTotalCost() {
+		return totalCost;
+	}
+
+	public void setTotalCost(double totalCost) {
+		this.totalCost = totalCost;
+	}
+
+	public Map<String, Map<String, Integer>> getModuleInstanceCount() {
+		return moduleInstanceCount;
+	}
+
+	public void setModuleInstanceCount(
+			Map<String, Map<String, Integer>> moduleInstanceCount) {
+		this.moduleInstanceCount = moduleInstanceCount;
+	}
+//////////////////////////////////////////////////Ragaa	
+	private long mips;    	
+	public long getMips() {
+	return mips;
+	}
+	public void setMips(long mips) {
+	this.mips = mips;
+	}   
+//////////////////////////////////////////////////Ragaa	
+}

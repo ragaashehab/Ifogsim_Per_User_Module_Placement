@@ -1,0 +1,6 @@
+#Fri Dec 13 18:27:12 EET 2019
+__DEFAULT__=false
+org.eclipse.sdk.Eclipse.master=true
+org.eclipse.sdk.Google.master=true
+org.eclipse.help.ui.localSearch.master=true
+expression=standard deviation
